@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.ig_border_gui.json
+build/
+dist/
+.DS_Store
+logos/*.png
+fonts/*.ttf
+fonts/*.otf
+fonts/*.ttc
