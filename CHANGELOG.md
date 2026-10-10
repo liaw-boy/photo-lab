@@ -3,6 +3,23 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 0.5.0 — 2026-10-10
+- **UI is now only the 紙稿 (paper) look**, after the Paper Wireframe Kit: white cards with 2 px black outlines,
+  outlined buttons, solid black main button, grey selected segments, no shadows, system font, always light.
+  The 暗房 / 炭灰 themes, the theme switch (and its restart path) and the preview glow are removed; an old
+  settings file with `"theme": ...` is simply ignored.
+- 圓角 has an adjustable radius ("弧度" slider, 1-60 per mille of the long edge, default 12); the slider is only
+  shown while 圓角 is on. Saved in the settings and in presets.
+- Resizing / zooming the window no longer leaves the left panel unscrollable: once the size settles the window is
+  nudged 1 px and back (the manual workaround of moving it), skipped while zoomed / full screen. (macOS Tk keeps
+  routing the wheel to a stale widget map after a resize; not reproducible without a real trackpad.)
+- UI consistency pass: one corner radius (8; 10 for the ratio tiles and the export button) and two control heights
+  (28 compact / 34 regular) across the main window, the style editor and the source manager; the 進階 toggle uses
+  a drawn chevron like the 選擇 buttons; the advanced rows line up with the rows above.
+- Card corners: the advanced section no longer clips the rounded outline.
+- Thumbnail strip: the empty band between the tiles and the horizontal scrollbar is gone.
+- Source cache / settings: the paper card outlines are no longer covered by the advanced section.
+
 ## 0.4.0 — 2026-10-10
 - The thumbnail strip is resizable: drag the small bar between the preview and the strip; the thumbnails scale
   with it (56–180 px high, remembered). Thumbnails are now decoded / cached at 240x180 so enlarging stays sharp

@@ -9,3 +9,7 @@ logos/*.png
 fonts/*.ttf
 fonts/*.otf
 fonts/*.ttc
+
+# design references exported from Figma community kits (not part of the project)
+Paper Wireframe Kit*.zip
+design_ref/

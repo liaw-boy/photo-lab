@@ -24,7 +24,7 @@ try:
 except ImportError:      # live light/dark switching of the tiles is a nicety, not a requirement
     class AppearanceModeTracker:
         add = remove = staticmethod(lambda *a, **k: None)
-from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageTk
+from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 import ig_border
 
@@ -89,7 +89,7 @@ BUILTIN_PRESETS = {
 PRESET_PLACEHOLDER = "選擇預設…"
 # A built-in preset is a complete look: anything it does not mention goes back to these values, so applying it gives
 # the same result whatever the previous state was. (Your own text, colour pick, output size, custom style stay.)
-PRESET_BASE = {"ratio": "4:5", "thickness": 10, "style": "white", "footer": False, "layout": "classic3",
+PRESET_BASE = {"ratio": "4:5", "thickness": 10, "style": "white", "corner": 12, "footer": False, "layout": "classic3",
                "fields": ["camera", "lens", "exposure", "date"], "divider": False, "center_divider": True,
                "text_scale": 100,
                "logo_scale": 100, "height_scale": 100, "bold": True, "color_choice": "自動",
@@ -118,41 +118,27 @@ ZOOM_MIN = 0.2           # minimum zoom, relative to "fit to window" (fit = 1.0)
 MAX_PHOTOS = 300         # the strip lists at most this many photos
 THUMB = (240, 180)          # decoded / cached thumbnail; tiles show it scaled to the chosen strip height
 THUMB_H_MIN, THUMB_H_MAX, THUMB_H_DEFAULT = 56, 180, 112     # displayed thumbnail height (px)
-STRIP_EXTRA = 74            # strip height = thumbnail height + name row, padding and the scrollbar
+STRIP_EXTRA = 50            # strip canvas height = thumbnail height + name row and padding (tile = th + 38, +8 pady)
+CORNER_MIN, CORNER_MAX, CORNER_DEFAULT = 1, 60, 12   # corner radius in 1/1000 of the long edge (12 = 1.2 %)
+STRIP_SCROLLBAR = 32        # the horizontal scrollbar and its padding sit below the canvas
 
-# Two colour sets (light, dark): "darkroom" = warm black with a safelight-amber accent (default), "carbon" = neutral
-# charcoal with a blue accent. The accent is a deep amber so that white text on it stays readable. The choice is stored
-# in the settings file and read once at start-up.
-PALETTES = {
-    "darkroom": {"label": "暗房", "ACCENT": ("#C9660A", "#CC6A0A"), "ACCENT_HOVER": ("#B35A08", "#E07A14"),
-                 "CARD": ("#ffffff", "#1B1511"), "BTN": ("#eceef2", "#2A211B"), "BTN_HOVER": ("#dfe2e8", "#382C24"),
-                 "MUTED": ("#6b7280", "#9A8B7C"), "WINDOW_BG": ("#f2f3f6", "#0E0A08"),
-                 "PV_BG": ("#e3e6ec", "#070504"), "THUMB_BG": (27, 21, 17)},
-    "carbon": {"label": "炭灰", "ACCENT": ("#3478f6", "#3d80f2"), "ACCENT_HOVER": ("#2a66d9", "#5c95f5"),
-               "CARD": ("#ffffff", "#24262a"), "BTN": ("#eceef2", "#2f3238"), "BTN_HOVER": ("#dfe2e8", "#3a3d44"),
-               "MUTED": ("#6b7280", "#8d93a0"), "WINDOW_BG": ("#f2f3f6", "#1b1c1f"),
-               "PV_BG": ("#e3e6ec", "#141518"), "THUMB_BG": (30, 32, 36)},
-}
-DEFAULT_THEME = "darkroom"
-
-
-def _stored_theme():
-    """The palette name from the settings file (it is read before the window exists); anything odd -> default."""
-    try:
-        if CONFIG.stat().st_size <= 1_000_000:
-            name = json.loads(CONFIG.read_text()).get("theme")
-            if isinstance(name, str) and name in PALETTES:
-                return name
-    except (OSError, ValueError, AttributeError):
-        pass
-    return DEFAULT_THEME
-
-
-THEME = _stored_theme()
-ACCENT, ACCENT_HOVER = PALETTES[THEME]["ACCENT"], PALETTES[THEME]["ACCENT_HOVER"]
-CARD, BTN, BTN_HOVER = PALETTES[THEME]["CARD"], PALETTES[THEME]["BTN"], PALETTES[THEME]["BTN_HOVER"]
-MUTED, WINDOW_BG, PV_BG = PALETTES[THEME]["MUTED"], PALETTES[THEME]["WINDOW_BG"], PALETTES[THEME]["PV_BG"]
-THUMB_BG = PALETTES[THEME]["THUMB_BG"]       # every thumbnail sits on a canvas of exactly THUMB size in this colour
+# The look: 紙稿 (black ink on paper), after the "Paper Wireframe Kit" (Figma community): #1B1B1B ink, #EEEEEE /
+# #D8D8D8 / #B4B4B4 greys, 2 px outlines, no shadows. Always light; each colour is a (light, dark) pair that simply
+# repeats the light value. (The earlier 暗房 / 炭灰 themes were removed in 0.5.0 - see CHANGELOG.)
+PALETTE = {"ACCENT": ("#1B1B1B", "#1B1B1B"), "ACCENT_HOVER": ("#454545", "#454545"),
+           "CARD": ("#FFFFFF", "#FFFFFF"), "BTN": ("#EEEEEE", "#EEEEEE"), "BTN_HOVER": ("#D8D8D8", "#D8D8D8"),
+           "MUTED": ("#696969", "#696969"), "WINDOW_BG": ("#EEEEEE", "#EEEEEE"),
+           "PV_BG": ("#D8D8D8", "#D8D8D8"), "THUMB_BG": (216, 216, 216),
+           "SEL": ("#B4B4B4", "#B4B4B4"), "SEL_HOVER": ("#929292", "#929292"),   # selected segment (dark text)
+           "INK": "#1B1B1B", "BORDER_W": 2}
+ACCENT, ACCENT_HOVER = PALETTE["ACCENT"], PALETTE["ACCENT_HOVER"]
+CARD, BTN, BTN_HOVER = PALETTE["CARD"], PALETTE["BTN"], PALETTE["BTN_HOVER"]
+MUTED, WINDOW_BG, PV_BG = PALETTE["MUTED"], PALETTE["WINDOW_BG"], PALETTE["PV_BG"]
+THUMB_BG = PALETTE["THUMB_BG"]       # every thumbnail sits on a canvas of exactly THUMB size in this colour
+SEL = PALETTE.get("SEL", ACCENT)                  # selected segment of a segmented button
+SEL_HOVER = PALETTE.get("SEL_HOVER", ACCENT_HOVER)
+INK = PALETTE.get("INK", "#000000")               # outline colour (only used when BORDER_W > 0)
+BORDER_W = PALETTE.get("BORDER_W", 0)             # outline width of cards / buttons / boxes (0 = none)
 GREEN = "#2fb350"
 AMBER = ("#c27c0e", "#e0a030")
 RED = "#e5484d"
@@ -164,8 +150,16 @@ STATE_TEXT = {"待處理": "", "已有輸出": "", "處理中": "匯出中",   #
 PILL_COLORS = {"完成": (96, 210, 128), "失敗": (255, 112, 112), "略過": (244, 180, 78), "處理中": (118, 172, 255),
                "已有輸出": (205, 210, 220)}
 
-ctk.set_appearance_mode("system")
+ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
+if BORDER_W:                                   # outlined, flat "ink on paper" look for every stock widget
+    _tm = ctk.ThemeManager.theme
+    _tm["CTkButton"].update(border_width=BORDER_W, border_color=[INK, INK])
+    _tm["CTkCheckBox"].update(border_width=2, border_color=[INK, INK])
+    _tm["CTkSwitch"].update(border_width=1)
+    _tm["CTkSegmentedButton"].update(fg_color=[INK, INK], border_width=2)
+    _tm["CTkOptionMenu"].update(fg_color=[BTN[0], BTN[0]])
+    _tm["CTkScrollbar"].update(button_color=["#929292", "#929292"], button_hover_color=["#696969", "#696969"])
 
 _Base = ctk.CTk
 if HAVE_DND:
@@ -313,6 +307,63 @@ def updown_icon(rgb, w=10, h=15, ss=8):
 
 
 _SELECT_ICON = None
+
+
+def chevron_icon(direction, rgb=(27, 27, 27), size=10, ss=8):
+    """A single rounded chevron ("right" or "down"), drawn like the 選擇 pop-up indicator (same stroke, same ink)."""
+    n = size * ss
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    lw = round(1.7 * ss)
+    a, b = n * 0.30, n * 0.70
+    pts = [(a, a * 0.9), (b, n / 2), (a, n - a * 0.9)] if direction == "right" else [(a * 0.9, a), (n / 2, b), (n - a * 0.9, a)]
+    d.line(pts, fill=rgb + (255,), width=lw, joint="curve")
+    for x, y in pts[::2]:
+        d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=rgb + (255,))
+    return img.resize((size * 3, size * 3), Image.LANCZOS)
+
+
+_CHEVRONS = {}
+
+
+def chevron(direction):
+    if direction not in _CHEVRONS:
+        im = chevron_icon(direction)
+        _CHEVRONS[direction] = ctk.CTkImage(light_image=im, dark_image=im, size=(10, 10))
+    return _CHEVRONS[direction]
+
+
+def unify_controls(root):
+    """One scale for every control, whichever code built it: corner radius 8 (10 for the big tiles and the main
+    export button), heights 28 (compact) / 34 (regular). Run once after a window has been built."""
+    def walk(w):
+        yield w
+        for c in w.winfo_children():
+            yield from walk(c)
+
+    def snap(h):
+        return 28 if h <= 30 else 34
+    for w in walk(root):
+        try:
+            t = type(w).__name__
+            if t == "CTkButton":
+                h = int(w.cget("height"))
+                text = w.cget("text") or ""
+                if w.cget("image") is not None and h >= 60:          # ratio tiles
+                    w.configure(corner_radius=10)
+                elif text.startswith(("匯出", "停止匯出")):             # the main export button
+                    w.configure(corner_radius=10)
+                else:
+                    w.configure(corner_radius=8)
+                    if h < 60 and w.cget("fg_color") != "transparent":
+                        w.configure(height=snap(h))
+            elif t in ("CTkOptionMenu", "CTkEntry", "CTkSegmentedButton"):
+                w.configure(corner_radius=8)
+                w.configure(height=snap(int(w.cget("height"))))
+            elif t == "CTkLabel" and w.cget("fg_color") != "transparent":
+                w.configure(corner_radius=8)
+        except (tk.TclError, ValueError, TypeError, AttributeError):
+            pass
 
 
 def select_icon():
@@ -521,6 +572,7 @@ class StyleEditor(ctk.CTkToplevel):
         self.load(app.effective_style())
         app.footer_on.set(True)
         self.render_preview()
+        unify_controls(self)
         self.update_idletasks()
         self.place_over(app)
         self.deiconify()
@@ -542,7 +594,7 @@ class StyleEditor(ctk.CTkToplevel):
         try:
             footer = ig_border.make_footer(src, Namespace(**app.footer_opts()), info=info)
             canvas = ig_border.build_canvas(src, "even", round(app.thick_var.get()), 0, footer,
-                                            app.frame_style())
+                                            app.frame_style(), corner=app.corner_frac())
         except Exception:
             return
         w, h = canvas.size
@@ -604,7 +656,7 @@ class StyleEditor(ctk.CTkToplevel):
                      font=ctk.CTkFont(size=12))
         for c, name in enumerate(ig_border.STYLE_BLOCKS):
             cols.columnconfigure(c, weight=1, uniform="blk")
-            card = ctk.CTkFrame(cols, corner_radius=14, fg_color=CARD)
+            card = ctk.CTkFrame(cols, corner_radius=14, fg_color=CARD, border_width=BORDER_W, border_color=INK)
             card.grid(row=0, column=c, sticky="nsew", padx=6, pady=4)
             head = ctk.CTkFrame(card, fg_color="transparent")
             head.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
@@ -1127,6 +1179,7 @@ class SourceManager(ctk.CTkToplevel):
         ctk.CTkButton(bar, text="完成", width=80, height=34, corner_radius=10, fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, command=self.close).grid(row=0, column=5)
         self.build_rows()
+        unify_controls(self)
         self.update_idletasks()
         place_over_app(self, app, 820, 560)
         self.deiconify()
@@ -1237,8 +1290,6 @@ class App(_Base):
         self.hq_pending = False
         self.view_job = None
         self.view = None
-        self._glow_key, self._glow_mask = None, None
-        self.glow_on = True                                   # soft ambient glow behind the photo in the preview
         self.drag = None
         self.zoom = 1.0              # 1.0 = fit to window
         self.cxn = self.cyn = 0.5    # view centre, normalised (0-1) so it survives canvas swaps
@@ -1284,6 +1335,7 @@ class App(_Base):
         legacy_round = old_style in ("圓角", "模糊")                          # the old 模糊 always had rounded corners
         self.round_var = tk.BooleanVar(value=cfg.get("rounded") if isinstance(cfg.get("rounded"), bool)
                                        else legacy_round)
+        self.corner_var = tk.DoubleVar(value=self.num(cfg.get("corner"), CORNER_MIN, CORNER_MAX, CORNER_DEFAULT))
         self.divider_var = tk.BooleanVar(value=cfg.get("footer_divider") is True)
         self.cdivider_var = tk.BooleanVar(value=cfg.get("footer_center_divider") is not False)   # centred layouts: "|"
         self.overwrite_var = tk.BooleanVar(value=cfg.get("overwrite") is True)
@@ -1350,12 +1402,15 @@ class App(_Base):
         self.custom_text_var.trace_add("write", lambda *a: self.schedule_preview(interactive=True))
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._last_size, self._nudge_job = None, None
+        self.bind("<Configure>", self.on_main_configure, add="+")
         threading.Thread(target=self.thumb_worker, daemon=True).start()
         self.after(200, self.drain_msgs)
         self.on_sources_changed(save=False)
         if self.preview_src is None:   # nothing to preview yet: neutral placeholder shows the layout
             self.preview_src = Image.new("RGB", (900, 600), (120, 130, 145))
         self.schedule_preview()
+        unify_controls(self)
         self.after(2000, self.poll)
         self.after(400, self.check_saved_paths)
 
@@ -1459,7 +1514,7 @@ class App(_Base):
 
     # ---------------- layout ----------------
     def card(self, parent, title, row):
-        outer = ctk.CTkFrame(parent, corner_radius=14, fg_color=CARD)
+        outer = ctk.CTkFrame(parent, corner_radius=14, fg_color=CARD, border_width=BORDER_W, border_color=INK)
         outer.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 10))
         outer.columnconfigure(0, weight=1)
         ctk.CTkLabel(outer, text=title, text_color=MUTED, anchor="w",
@@ -1491,13 +1546,6 @@ class App(_Base):
         ctk.CTkLabel(names, text="Photo_Lab", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w")
         ctk.CTkLabel(names, text="v%s" % ig_border.__version__, text_color=MUTED, font=ctk.CTkFont(size=11)
                      ).grid(row=1, column=0, sticky="w", padx=2)
-        self.theme_var = tk.StringVar(value=PALETTES[THEME]["label"])
-        ctk.CTkSegmentedButton(head, values=[v["label"] for v in PALETTES.values()], variable=self.theme_var,
-                               width=96, height=26, corner_radius=8, selected_color=ACCENT,
-                               selected_hover_color=ACCENT_HOVER, unselected_color=BTN, unselected_hover_color=BTN_HOVER,
-                               text_color=("gray10", "gray95"), font=ctk.CTkFont(size=11), command=self.on_theme
-                               ).grid(row=0, column=2, sticky="e")
-
         # presets
         c0 = self.card(left, "預設組合", 1)
         pr = ctk.CTkFrame(c0, fg_color="transparent")
@@ -1552,12 +1600,26 @@ class App(_Base):
                       button_color=ACCENT, button_hover_color=ACCENT_HOVER, progress_color=ACCENT,
                       command=self.on_thick).grid(row=3, column=0, sticky="ew", padx=16, pady=(6, 12))
         ctk.CTkSegmentedButton(c2, values=list(BG_LABELS), variable=self.style_var, height=32,
-                               corner_radius=10, selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
+                               corner_radius=10, selected_color=SEL, selected_hover_color=SEL_HOVER,
                                unselected_color=BTN, unselected_hover_color=BTN_HOVER,
                                text_color=("gray10", "gray95"), command=lambda v: self.schedule_preview()
                                ).grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 10))
-        ctk.CTkSwitch(c2, text="圓角", variable=self.round_var, progress_color=ACCENT,
-                      command=self.schedule_preview).grid(row=5, column=0, sticky="w", padx=16, pady=(0, 16))
+        crow = ctk.CTkFrame(c2, fg_color="transparent")
+        crow.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
+        crow.columnconfigure(1, weight=1)
+        ctk.CTkSwitch(crow, text="圓角", variable=self.round_var, progress_color=ACCENT,
+                      command=self.on_round_toggle).grid(row=0, column=0, sticky="w")
+        self.corner_box = ctk.CTkFrame(crow, fg_color="transparent")        # only while 圓角 is on
+        self.corner_box.grid(row=0, column=1, sticky="ew", padx=(14, 0))
+        self.corner_box.columnconfigure(1, weight=1)
+        ctk.CTkLabel(self.corner_box, text="弧度", text_color=MUTED, font=ctk.CTkFont(size=12)
+                     ).grid(row=0, column=0)
+        ctk.CTkSlider(self.corner_box, from_=CORNER_MIN, to=CORNER_MAX, number_of_steps=CORNER_MAX - CORNER_MIN,
+                      variable=self.corner_var, height=16, button_color=ACCENT, button_hover_color=ACCENT_HOVER,
+                      progress_color=ACCENT, command=self.on_corner).grid(row=0, column=1, sticky="ew", padx=8)
+        self.corner_lbl = ctk.CTkLabel(self.corner_box, text="", width=30, font=ctk.CTkFont(size=12))
+        self.corner_lbl.grid(row=0, column=2)
+        self.on_round_toggle(preview=False)
         self.on_thick()
 
         # camera info
@@ -1615,7 +1677,7 @@ class App(_Base):
         # output
         c3 = self.card(left, "輸出長邊 (px)", 4)
         ctk.CTkSegmentedButton(c3, values=list(SIZE_LABELS), variable=self.size_var, height=34,
-                               corner_radius=10, selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
+                               corner_radius=10, selected_color=SEL, selected_hover_color=SEL_HOVER,
                                unselected_color=BTN, unselected_hover_color=BTN_HOVER,
                                text_color=("gray10", "gray95"), command=lambda v: self.schedule_preview()
                                ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
@@ -1633,7 +1695,7 @@ class App(_Base):
 
         def line(row, text, pady=(8, 0), parent=c6):
             f = ctk.CTkFrame(parent, fg_color="transparent")
-            f.grid(row=row, column=0, sticky="ew", padx=16, pady=pady)
+            f.grid(row=row, column=0, sticky="ew", padx=16 if parent is c6 else ADV_PADX, pady=pady)
             f.columnconfigure(1, weight=1)
             ctk.CTkLabel(f, text=text, width=64, anchor="w").grid(row=0, column=0)
             return f
@@ -1642,12 +1704,15 @@ class App(_Base):
         self.datefmt_menu = ctk.CTkOptionMenu(r, values=list(DATE_LABELS), variable=self.datefmt_var,
                                               command=lambda v: self.schedule_preview(), **menu)
         self.datefmt_menu.grid(row=0, column=1, sticky="ew")
-        self.adv_btn = ctk.CTkButton(c6, text="", height=28, corner_radius=10, fg_color="transparent",
-                                     hover_color=BTN, text_color=MUTED, anchor="w", command=self.toggle_advanced)
-        self.adv_btn.grid(row=4, column=0, sticky="ew", padx=10, pady=(6, 0))
+        self.adv_btn = ctk.CTkButton(c6, text="", image=chevron("right"), compound="left", height=28,
+                                     corner_radius=8, fg_color="transparent", border_width=0, hover_color=BTN,
+                                     text_color=("gray10", "gray95"), anchor="w", font=ctk.CTkFont(size=13),
+                                     command=self.toggle_advanced)
+        self.adv_btn.grid(row=4, column=0, sticky="ew", padx=10, pady=(6, 12))
+        ADV_PADX = 16 - (BORDER_W + 2)            # rows line up with the rows above (card padding 16 in total)
         adv = self.adv_frame = ctk.CTkFrame(c6, fg_color="transparent")
         adv.columnconfigure(0, weight=1)
-        self.slider_row(adv, 0, "資訊列高度", self.height_scale, 60, 250)
+        self.slider_row(adv, 0, "資訊列高度", self.height_scale, 60, 250, padx=ADV_PADX)
         fr = line(1, "字體", (4, 0), adv)
         self.font_menu = ctk.CTkOptionMenu(fr, values=list(self.font_labels), variable=self.font_var,
                                            command=lambda v: self.schedule_preview(), **menu)
@@ -1668,17 +1733,16 @@ class App(_Base):
                                                command=lambda v: self.schedule_preview(), **menu)
         self.exporder_menu.grid(row=0, column=1, sticky="ew")
         sw = ctk.CTkFrame(adv, fg_color="transparent")
-        sw.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 0))
+        sw.grid(row=5, column=0, sticky="ew", padx=ADV_PADX, pady=(10, 0))
         self.main_sw = ctk.CTkSwitch(sw, text="鏡頭當主文字（粗體），機身放下面", variable=self.main_var,
                                      progress_color=ACCENT, command=self.schedule_preview)
         self.main_sw.grid(row=0, column=0, sticky="w")
         self.mirror_sw = ctk.CTkSwitch(sw, text="左右對調（參數在左，logo 與機型在右）", variable=self.mirror_var,
                                        progress_color=ACCENT, command=self.schedule_preview)
         self.mirror_sw.grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ct = line(6, "自訂文字", (10, 4), adv)
+        ct = line(6, "自訂文字", (10, 14), adv)
         ctk.CTkEntry(ct, textvariable=self.custom_text_var, height=30, corner_radius=10, border_width=0, fg_color=BTN,
                      placeholder_text="例如 @你的 IG 帳號（最多 60 字）").grid(row=0, column=1, sticky="ew")
-        ctk.CTkFrame(c6, height=10, fg_color="transparent").grid(row=6, column=0)
         self.apply_advanced()
         self.update_footer_controls()
 
@@ -1694,6 +1758,7 @@ class App(_Base):
         self.status = ctk.CTkLabel(st, text="待機中", text_color=MUTED, anchor="w")
         self.status.grid(row=0, column=1, padx=(2, 0), sticky="w")
         ctk.CTkButton(st, text="開啟輸出資料夾", width=100, height=24, corner_radius=12, fg_color="transparent",
+                      border_width=0,
                       hover_color=BTN_HOVER, text_color=MUTED, font=ctk.CTkFont(size=12),
                       command=self.open_output).grid(row=0, column=2, sticky="e")
 
@@ -1798,7 +1863,7 @@ class App(_Base):
         right.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=16)
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=6)
-        right.rowconfigure(3, weight=0, minsize=self.thumb_h + STRIP_EXTRA + 8)
+        right.rowconfigure(3, weight=0, minsize=self.thumb_h + STRIP_EXTRA + STRIP_SCROLLBAR)
 
         pv = ctk.CTkFrame(right, corner_radius=16, fg_color=PV_BG)
         pv.grid(row=0, column=0, sticky="nsew")
@@ -1917,6 +1982,7 @@ class App(_Base):
                 "size": self.size_var.get(), "thickness": round(self.thick_var.get(), 1),
                 "footer": bool(self.footer_on.get()), "footer_layout": self.layout_var.get(),
                 "style": self.style_var.get(), "rounded": bool(self.round_var.get()),
+                "corner": round(self.corner_var.get()),
                 "footer_divider": bool(self.divider_var.get()),
                 "footer_center_divider": bool(self.cdivider_var.get()),
                 "overwrite": bool(self.overwrite_var.get()),
@@ -1928,7 +1994,7 @@ class App(_Base):
                 "logo_pos": LOGO_POS_LABELS.get(self.logopos_var.get(), "left"),
                 "custom_text": self.clean_text(self.custom_text_var.get()),
                 "lens_main": bool(self.main_var.get()), "mirror": bool(self.mirror_var.get()),
-                "advanced_open": bool(self.adv_open), "theme": THEME, "thumb_h": self.thumb_h,
+                "advanced_open": bool(self.adv_open), "thumb_h": self.thumb_h,
                 "exposure_items": [k for k, v in self.exp_vars.items() if v.get()],
                 "exposure_order": EXPO_ORDER_LABELS.get(self.exporder_var.get(), "std"),
                 "font": self.font_labels.get(self.font_var.get(), "auto"),
@@ -2111,31 +2177,6 @@ class App(_Base):
         self.set_status("已重新掃描字體（%d 種）" % len(self.font_labels), GREEN)
         self.schedule_preview()
 
-    def on_theme(self, label):
-        """Colours are baked into the widgets when they are built, so a new palette means restarting the program."""
-        name = next((k for k, v in PALETTES.items() if v["label"] == label), THEME)
-        if name == THEME:
-            return
-        if self.batch and self.batch.is_alive():
-            messagebox.showinfo("匯出中", "還有照片正在匯出，請等匯出完再切換配色。")
-            self.theme_var.set(PALETTES[THEME]["label"])
-            return
-        if not messagebox.askyesno("切換配色", "切換配色需要重新啟動程式（設定會保留）。現在重新啟動嗎？"):
-            self.theme_var.set(PALETTES[THEME]["label"])
-            return
-        self.save_cfg()
-        try:                                   # save_cfg wrote the old name; update only that key, atomically
-            data = json.loads(CONFIG.read_text())
-            data["theme"] = name
-            fd, tmp = tempfile.mkstemp(prefix=".ig_border_gui.", suffix=".tmp", dir=str(CONFIG.parent))
-            with os.fdopen(fd, "w") as f:
-                json.dump(data, f)
-            os.replace(tmp, CONFIG)
-        except (OSError, ValueError):
-            self.theme_var.set(PALETTES[THEME]["label"])
-            return
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
     def title_icon(self):
         """The app icon, small, for the header (None when the file is missing: the title is shown without it)."""
         try:
@@ -2157,6 +2198,24 @@ class App(_Base):
         except (OSError, tk.TclError, ValueError):
             pass
 
+    def corner_frac(self):
+        """Corner radius as a fraction of the photo's long edge."""
+        return float(self.corner_var.get()) / 1000
+
+    def on_corner(self, *_):
+        self.corner_lbl.configure(text="%d" % round(self.corner_var.get()))
+        self.schedule_preview(interactive=True)
+
+    def on_round_toggle(self, preview=True):
+        """The radius slider only makes sense while the corners are rounded."""
+        if self.round_var.get():
+            self.corner_box.grid()
+        else:
+            self.corner_box.grid_remove()
+        self.corner_lbl.configure(text="%d" % round(self.corner_var.get()))
+        if preview:
+            self.schedule_preview()
+
     def frame_style(self):
         """The style code the renderer takes, from the background choice and the rounded-corners switch."""
         bg = BG_LABELS.get(self.style_var.get(), "white")
@@ -2168,10 +2227,12 @@ class App(_Base):
 
     def apply_advanced(self):
         if self.adv_open:
-            self.adv_frame.grid(row=5, column=0, sticky="ew")
+            self.adv_frame.grid(row=5, column=0, sticky="ew", padx=BORDER_W + 2,
+                                pady=(0, 16))      # clear of the card's rounded corners (radius 14) and outline
         else:
             self.adv_frame.grid_remove()
-        self.adv_btn.configure(text=("▾ 進階" if self.adv_open else "▸ 進階（字體、顏色、logo 位置…）"))
+        self.adv_btn.configure(image=chevron("down" if self.adv_open else "right"),
+                               text=("進階" if self.adv_open else "進階（字體、顏色、logo 位置…）"))
 
     def on_footer_change(self, *_):
         self.update_footer_controls()
@@ -2216,9 +2277,9 @@ class App(_Base):
             self.apply_settings({**FOOTER_BASE, **look})
             self.set_status("已套用樣式：%s" % name, GREEN)
 
-    def slider_row(self, parent, row, text, var, lo, hi):
+    def slider_row(self, parent, row, text, var, lo, hi, padx=16):
         f = ctk.CTkFrame(parent, fg_color="transparent")
-        f.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 6))
+        f.grid(row=row, column=0, sticky="ew", padx=padx, pady=(0, 6))
         f.columnconfigure(0, weight=1)
         ctk.CTkLabel(f, text=text, anchor="w").grid(row=0, column=0, sticky="w")
         pct = ctk.CTkLabel(f, text="", width=48, corner_radius=8, fg_color=BTN)
@@ -2678,7 +2739,7 @@ class App(_Base):
             return
         self.thumb_h = h
         self.strip.configure(height=h + STRIP_EXTRA)
-        self.right_area.rowconfigure(3, minsize=h + STRIP_EXTRA + 8)
+        self.right_area.rowconfigure(3, minsize=h + STRIP_EXTRA + STRIP_SCROLLBAR)
         if self.thumb_job:
             self.after_cancel(self.thumb_job)
         self.thumb_job = self.after(90, self.apply_thumb_size)
@@ -2857,7 +2918,7 @@ class App(_Base):
 
     def params_key(self):
         fo = self.footer_opts()
-        return (self.ratio, round(self.thick_var.get()), self.frame_style(),
+        return (self.ratio, round(self.thick_var.get()), self.frame_style(), round(self.corner_var.get()),
                 SIZE_LABELS.get(self.size_var.get(), 2048), tuple((k, str(v)) for k, v in sorted(fo.items())),
                 str(self.preview_path), self.preview_mtime)
 
@@ -2897,7 +2958,7 @@ class App(_Base):
         info = ig_border.SAMPLE_INFO if self.preview_info is None else self.preview_info
         footer = ig_border.make_footer(src, Namespace(**self.footer_opts()), info=info)
         self.fast_canvas = ig_border.build_canvas(src, self.ratio, round(self.thick_var.get()), 0, footer,
-                                                  self.frame_style())
+                                                  self.frame_style(), corner=self.corner_frac())
         self.last_fast = time.monotonic()
         self.hq_canvas = None            # parameters changed: the real render is stale
         if interactive:
@@ -2925,7 +2986,7 @@ class App(_Base):
             return
         job = {"key": self.params_key(), "path": self.preview_path, "ratio": self.ratio,
                "thick": round(self.thick_var.get()), "max_edge": SIZE_LABELS.get(self.size_var.get(), 2048),
-               "style": self.frame_style(), "footer": self.footer_opts()}
+               "style": self.frame_style(), "corner": self.corner_frac(), "footer": self.footer_opts()}
         self.hq_running, self.hq_pending = True, False
         threading.Thread(target=self.hq_worker, args=(job,), daemon=True).start()
 
@@ -2935,7 +2996,7 @@ class App(_Base):
             with ig_border.open_image(job["path"], job["max_edge"]) as im:
                 footer = ig_border.make_footer(im, Namespace(**job["footer"]))
                 canvas = ig_border.build_canvas(im, job["ratio"], job["thick"], job["max_edge"], footer,
-                                                job["style"])
+                                                job["style"], corner=job["corner"])
                 canvas.load()
         except Exception:
             canvas = None
@@ -3025,48 +3086,12 @@ class App(_Base):
         except (tk.TclError, AttributeError):
             return PV_BG[1]
 
-    def glow_mask(self, w, h):
-        """Soft elliptical falloff (L image, label size), built small and scaled up; cached for the current size."""
-        key = (w, h)
-        if self._glow_key != key:
-            sw, sh = max(8, w // 6), max(8, h // 6)
-            m = Image.new("L", (sw, sh), 0)
-            ImageDraw.Draw(m).ellipse((sw * 0.12, sh * 0.10, sw * 0.88, sh * 0.90), fill=255)
-            m = m.filter(ImageFilter.GaussianBlur(max(sw, sh) * 0.13))
-            m = m.resize((w, h), Image.BICUBIC).point(lambda v: round(v * 0.55))
-            self._glow_mask, self._glow_key = m, key
-        return self._glow_mask
-
-    def with_glow(self, im, bg_hex):
-        """`im` centred on a label-sized background that carries a soft glow in the photo's own average colour
-        (like the ambient light of a lit print). Only for dark preview backgrounds and when the image does not
-        fill the whole area."""
-        lw, lh = self.preview_lbl.winfo_width(), self.preview_lbl.winfo_height()
-        if lw < 60 or lh < 60 or (im.width >= lw - 2 and im.height >= lh - 2):
-            return im
-        try:
-            base = tuple(int(bg_hex[i:i + 2], 16) for i in (1, 3, 5))
-        except (ValueError, IndexError):
-            return im
-        if sum(base) > 300:                                   # light preview background: no glow
-            return im
-        r, g, b = im.resize((1, 1), Image.BOX).getpixel((0, 0))[:3]
-        top = max(r, g, b, 1)
-        k = min(2.4, 210 / top)                               # lift dim photos so the glow stays visible
-        tint = (min(255, round(r * k)), min(255, round(g * k)), min(255, round(b * k)))
-        out = Image.new("RGB", (lw, lh), base)
-        out.paste(Image.new("RGB", (lw, lh), tint), (0, 0), self.glow_mask(lw, lh))
-        out.paste(im, ((lw - im.width) // 2, (lh - im.height) // 2))
-        return out
-
     def show_image(self, im):
         """Show a PIL image in the preview, reusing the PhotoImage when the size is unchanged (no allocations)."""
         bg = self.preview_bg()
         if bg != self.preview_bg_cache:
             self.preview_lbl.configure(bg=bg)
             self.preview_bg_cache = bg
-        if self.glow_on:
-            im = self.with_glow(im, bg)
         ph = self.preview_photo
         if ph is not None and ph.width() == im.width and ph.height() == im.height:
             ph.paste(im)
@@ -3241,7 +3266,7 @@ class App(_Base):
     def collect_settings(self):
         fo = self.footer_opts()
         return {"ratio": self.ratio, "thickness": round(self.thick_var.get()),
-                "style": self.frame_style(), "size": self.size_var.get(),
+                "style": self.frame_style(), "corner": round(self.corner_var.get()), "size": self.size_var.get(),
                 "footer": fo["footer"], "layout": fo["footer_layout"], "fields": fo["footer_fields"],
                 "divider": fo["footer_divider"], "center_divider": fo["footer_center_divider"],
                 "text_scale": round(self.text_scale.get()),
@@ -3266,6 +3291,9 @@ class App(_Base):
             bg, rounded = STYLE_PARTS[d["style"]]
             self.style_var.set(self.label_of(BG_LABELS, bg, "白底"))
             self.round_var.set(rounded)
+        if "corner" in d:
+            self.corner_var.set(self.num(d["corner"], CORNER_MIN, CORNER_MAX, CORNER_DEFAULT))
+        self.on_round_toggle(preview=False)
         if self.choice(d.get("size"), SIZE_LABELS, None):
             self.size_var.set(d["size"])
         if "footer" in d:
@@ -3499,7 +3527,7 @@ class App(_Base):
             opts = Namespace(ratio=self.ratio, thickness=round(float(self.thick_var.get()), 1),
                              max_edge=SIZE_LABELS[self.size_var.get()], quality=95,
                              overwrite=bool(self.overwrite_var.get()),
-                             style=self.frame_style(), **self.footer_opts())
+                             style=self.frame_style(), corner=self.corner_frac(), **self.footer_opts())
         except (ValueError, KeyError, tk.TclError, OSError):
             messagebox.showerror("錯誤", "請檢查資料夾與設定")
             return None
@@ -3604,6 +3632,35 @@ class App(_Base):
             if self.batch_fail_reason:
                 text += "（%s）" % self.batch_fail_reason
         self.set_status(text, RED if fail else (AMBER if skip else GREEN))
+
+    def on_main_configure(self, event):
+        """After a resize / zoom, macOS Tk can keep routing the wheel to the wrong widget until the window is moved
+        (the left panel then would not scroll). When the size has settled, move the window by 1 px and back,
+        which is exactly the workaround of moving it by hand. Never while zoomed / full screen."""
+        if event.widget is not self:
+            return
+        size = (event.width, event.height)
+        if size == self._last_size:
+            return                                 # a pure move: nothing to do (and no feedback loop)
+        first = self._last_size is None
+        self._last_size = size
+        if first:
+            return
+        if self._nudge_job:
+            self.after_cancel(self._nudge_job)
+        self._nudge_job = self.after(350, self.nudge_window)
+
+    def nudge_window(self):
+        self._nudge_job = None
+        try:
+            if self.state() == "zoomed" or self.attributes("-fullscreen"):
+                return
+            x, y = self.winfo_x(), self.winfo_y()
+            self.geometry("+%d+%d" % (x + 1, y))
+            self.update_idletasks()
+            self.geometry("+%d+%d" % (x, y))
+        except tk.TclError:
+            pass
 
     def on_close(self):
         if self.batch and self.batch.is_alive():

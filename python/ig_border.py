@@ -789,7 +789,7 @@ def save_style_file(path, style, settings, name=""):
 def _clamp(value, lo, hi, default):
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):      # OverflowError: an absurdly large integer
         return default
     return min(hi, max(lo, v)) if v == v else default
 
@@ -921,7 +921,7 @@ def cleanup_temp(out_dir, older_than=60):
         pass
 
 
-def build_canvas(img, ratio, thickness, max_edge, footer=None, style="white"):
+def build_canvas(img, ratio, thickness, max_edge, footer=None, style="white", corner=None):
     """Return a new RGB image: `img` on a canvas (white / rounded / blurred), optionally with a camera-info footer."""
     if img.mode == "RGB" and max_edge and max(img.size) > max_edge:
         # shrink first: transposing a full-size copy of a big photo is the memory peak
@@ -976,7 +976,7 @@ def build_canvas(img, ratio, thickness, max_edge, footer=None, style="white"):
         _shadow(canvas, (px, py, w, h), 0, long_edge, 0.50)
         canvas.paste(img, (px, py))
     else:
-        r = max(2, round(long_edge * CORNER))
+        r = max(2, round(long_edge * (CORNER if corner is None else _clamp(corner, 0.001, 0.08, CORNER))))
         _shadow(canvas, (px, py, w, h), r, long_edge, 0.50 if is_blur else 0.22)
         canvas.paste(img, (px, py), _rounded_mask((w, h), r))
 
@@ -1022,7 +1022,8 @@ def process(src, out_dir, opts, name=None):
     with open_image(src, opts.max_edge) as img:
         icc = _rgb_icc(img.info.get("icc_profile"))
         footer = make_footer(img, opts)
-        canvas = build_canvas(img, opts.ratio, opts.thickness, opts.max_edge, footer, getattr(opts, "style", "white"))
+        canvas = build_canvas(img, opts.ratio, opts.thickness, opts.max_edge, footer, getattr(opts, "style", "white"),
+                              corner=getattr(opts, "corner", None))
     # atomic write so nothing ever sees a half-written file
     fd, tmp = tempfile.mkstemp(prefix=".ig_tmp_", suffix=".jpg", dir=str(out_dir))
     os.close(fd)
