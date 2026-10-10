@@ -543,6 +543,114 @@ def place_over_app(win, app, w, h):
     win.geometry("%dx%d+%d+%d" % (w, h, x, y))
 
 
+class TextPrompt(ctk.CTkToplevel):
+    """Small modal "type a name" dialog in the app's own look (the stock CTkInputDialog has blue English
+    Ok / Cancel buttons and a grey entry). `ask()` returns the text, or None when cancelled."""
+
+    def __init__(self, app, title, label, ok_text="儲存", maxlen=30):
+        super().__init__(app)
+        self.withdraw()
+        self.result = None
+        self.maxlen = maxlen
+        self.title(title)
+        self.configure(fg_color=WINDOW_BG)
+        self.resizable(False, False)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.columnconfigure(0, weight=1)
+        ctk.CTkLabel(self, text=label, anchor="w", font=ctk.CTkFont(size=14)).grid(
+            row=0, column=0, sticky="ew", padx=24, pady=(22, 8))
+        self.var = tk.StringVar()
+        self.entry = ctk.CTkEntry(self, textvariable=self.var, height=34, corner_radius=8, border_width=BORDER_W,
+                                  border_color=INK, fg_color="#FFFFFF", font=ctk.CTkFont(size=13))
+        self.entry.grid(row=1, column=0, sticky="ew", padx=24)
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=2, column=0, sticky="e", padx=24, pady=(16, 20))
+        small = dict(height=34, corner_radius=8, width=84, font=ctk.CTkFont(size=13))
+        ctk.CTkButton(bar, text="取消", fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"),
+                      command=self.cancel, **small).grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkButton(bar, text=ok_text, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
+                      command=self.accept, **small).grid(row=0, column=1)
+        self.bind("<Return>", lambda e: self.accept())
+        self.bind("<Escape>", lambda e: self.cancel())
+        self.update_idletasks()
+        place_over_app(self, app, 420, self.winfo_reqheight())
+        self.deiconify()
+        self.lift()
+        self.grab_set()
+        self.entry.focus_set()
+
+    def accept(self):
+        self.result = re.sub(r"[\x00-\x1f\x7f]", "", self.var.get()).strip()[:self.maxlen] or None
+        self.destroy()
+
+    def cancel(self):
+        self.result = None
+        self.destroy()
+
+    def ask(self):
+        self.wait_window()
+        return self.result
+
+
+class ExistsDialog(ctk.CTkToplevel):
+    """"Some outputs already exist": overwrite, cancel or (optionally) skip the ones that exist.
+    `ask()` returns "overwrite", "skip" or None (cancel)."""
+
+    def __init__(self, app, n_exist, n_total, n_changed, can_skip=True):
+        super().__init__(app)
+        self.withdraw()
+        self.result = None
+        self.title("輸出已存在")
+        self.configure(fg_color=WINDOW_BG)
+        self.resizable(False, False)
+        self.transient(app)
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.columnconfigure(0, weight=1)
+        head = "輸出檔已存在：%d 張" % n_exist if n_exist < n_total else "輸出檔已存在：全部 %d 張" % n_total
+        ctk.CTkLabel(self, text=head, anchor="w", font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, sticky="ew", padx=24, pady=(22, 4))
+        lines = ["要覆蓋它們嗎？覆蓋後無法復原。"]
+        if n_changed:
+            lines.insert(0, "其中 %d 張是用不同的設定匯出的（你之後改過設定）。" % n_changed)
+        elif n_exist:
+            lines.insert(0, "它們的設定與現在相同，重新匯出結果不會有差別。")
+        ctk.CTkLabel(self, text="\n".join(lines), anchor="w", justify="left", text_color=MUTED,
+                     font=ctk.CTkFont(size=13), wraplength=400).grid(row=1, column=0, sticky="ew", padx=24)
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=2, column=0, sticky="e", padx=24, pady=(18, 20))
+        small = dict(height=34, corner_radius=8, font=ctk.CTkFont(size=13))
+        col = 0
+        if can_skip:
+            ctk.CTkButton(bar, text="只匯出新的", width=104, fg_color=BTN, hover_color=BTN_HOVER,
+                          text_color=("gray10", "gray95"), command=lambda: self.done("skip"), **small
+                          ).grid(row=0, column=col, padx=(0, 8))
+            col += 1
+        ctk.CTkButton(bar, text="取消", width=84, fg_color=BTN, hover_color=BTN_HOVER,
+                      text_color=("gray10", "gray95"), command=self.cancel, **small
+                      ).grid(row=0, column=col, padx=(0, 8))
+        ctk.CTkButton(bar, text="覆蓋", width=84, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
+                      command=lambda: self.done("overwrite"), **small).grid(row=0, column=col + 1)
+        self.bind("<Escape>", lambda e: self.cancel())
+        self.update_idletasks()
+        place_over_app(self, app, 460, self.winfo_reqheight())
+        self.deiconify()
+        self.lift()
+        self.grab_set()
+
+    def done(self, value):
+        self.result = value
+        self.destroy()
+
+    def cancel(self):
+        self.result = None
+        self.destroy()
+
+    def ask(self):
+        self.wait_window()
+        return self.result
+
+
 class StyleEditor(ctk.CTkToplevel):
     """Design the footer: three blocks (left / centre / right), each at most two lines, each line up to three
     items (model, lens, ISO, date, logo ...) with its own weight, size, tone and separators. It always starts from
@@ -1684,7 +1792,7 @@ class App(_Base):
         ctk.CTkCheckBox(c3, text="覆蓋已存在的輸出檔", variable=self.overwrite_var, checkbox_width=20,
                         checkbox_height=20, fg_color=ACCENT, hover_color=ACCENT_HOVER
                         ).grid(row=2, column=0, sticky="w", padx=16, pady=(0, 4))
-        ctk.CTkLabel(c3, text="預設關閉：輸出已存在就略過。改了設定想重轉再勾選。",
+        ctk.CTkLabel(c3, text="輸出檔已存在時會跳出視窗，讓你選擇覆蓋或取消。勾選這裡則預設覆蓋（仍會先確認）。",
                      text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=290, justify="left", anchor="w"
                      ).grid(row=3, column=0, sticky="w", padx=16, pady=(0, 14))
 
@@ -3351,8 +3459,7 @@ class App(_Base):
             self.set_status("已套用預設：%s" % name, GREEN)
 
     def save_preset(self):
-        dlg = ctk.CTkInputDialog(text="預設名稱（最多 30 字）：", title="儲存預設")
-        name = self.clean_text(dlg.get_input() or "", 30)
+        name = self.clean_text(TextPrompt(self, "儲存預設", "預設名稱（最多 30 字）").ask() or "", 30)
         if not name:
             return
         if name in BUILTIN_PRESETS:
@@ -3593,10 +3700,18 @@ class App(_Base):
         if not paths:
             messagebox.showinfo("沒有照片", "沒有勾選任何照片。")
             return
-        if opts.overwrite:
-            k = sum((out / self.out_name(p)).exists() for p in paths)
-            if k and not messagebox.askyesno("覆蓋確認", "有 %d 張的輸出檔已存在，會被覆蓋。要繼續嗎？" % k):
-                return
+        existing = [p for p in paths if (out / self.out_name(p)).exists()]
+        if existing:
+            # how many of them were made with different settings than the current ones (fingerprint in the file)
+            changed = 0
+            for p in existing:
+                old = ig_border.existing_signature(out / self.out_name(p))
+                if old is not None and old != ig_border.render_signature(p, opts):
+                    changed += 1
+            choice = ExistsDialog(self, len(existing), len(paths), changed, can_skip=not opts.overwrite).ask()
+            if choice is None:
+                return                                   # 取消
+            opts.overwrite = (choice == "overwrite")      # for this run only; the checkbox is not touched
         self.save_cfg()
         for p in paths:
             self.states.pop(p, None)

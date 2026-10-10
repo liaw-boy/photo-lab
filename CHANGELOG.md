@@ -3,6 +3,13 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 0.5.1 — 2026-10-10
+- Exporting when outputs already exist now asks first: "輸出檔已存在" with 覆蓋 / 取消 / 只匯出新的 (and how many
+  of them were made with different settings). The choice applies to that run only. Every export now carries a
+  small settings fingerprint in the JPEG comment, which is what lets the dialog tell the two cases apart.
+- 儲存預設 dialog is the app's own paper-style prompt (outlined entry, 取消 / 儲存) instead of the stock blue
+  English Ok / Cancel one.
+
 ## 0.5.0 — 2026-10-10
 - **UI is now only the 紙稿 (paper) look**, after the Paper Wireframe Kit: white cards with 2 px black outlines,
   outlined buttons, solid black main button, grey selected segments, no shadows, system font, always light.

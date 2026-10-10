@@ -18,6 +18,7 @@ under the photo. Brand logos are NOT bundled: put your own PNGs in ./logos/ name
 brand in lowercase (sony.png, canon.png, ...). GPS and serial numbers are never read.
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -1014,9 +1015,41 @@ def build_canvas(img, ratio, thickness, max_edge, footer=None, style="white", co
     return canvas
 
 
+SIG_PREFIX = "Photo_Lab sig="
+
+
+def render_signature(src, opts):
+    """Short fingerprint of everything that decides how `src` is rendered: the source file (name, size, mtime)
+    and every render setting (frame, size, quality, style, corner, all footer options). Not the overwrite flag."""
+    try:
+        st = Path(src).stat()
+        src_part = [Path(src).name, st.st_size, st.st_mtime_ns]
+    except OSError:
+        src_part = [str(src)]
+    keys = ("ratio", "thickness", "max_edge", "quality", "style", "corner")
+    settings = {k: getattr(opts, k, None) for k in keys}
+    settings.update({k: v for k, v in vars(opts).items() if k.startswith("footer")})
+    blob = json.dumps([src_part, settings, "v" + __version__.rsplit(".", 1)[0]], sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def existing_signature(path):
+    """The fingerprint stored in an earlier output (None for files made by other tools or older versions)."""
+    try:
+        with Image.open(path, formats=["JPEG"]) as im:
+            c = im.info.get("comment")
+        text = c.decode("utf-8", "replace") if isinstance(c, (bytes, bytearray)) else str(c or "")
+        if text.startswith(SIG_PREFIX):
+            return text[len(SIG_PREFIX):].strip()[:16]
+    except Exception:          # unreadable / oversized / replaced file (incl. DecompressionBombError): "unknown"
+        pass
+    return None
+
+
 def process(src, out_dir, opts, name=None):
     dst = out_dir / (name or output_name(src))
-    if dst.exists() and not opts.overwrite:
+    sig = render_signature(src, opts)
+    if dst.exists() and not opts.overwrite:      # the caller (the GUI asks first) decides about overwriting
         print("skip (exists): %s" % dst.name)
         return None
     with open_image(src, opts.max_edge) as img:
@@ -1028,7 +1061,7 @@ def process(src, out_dir, opts, name=None):
     fd, tmp = tempfile.mkstemp(prefix=".ig_tmp_", suffix=".jpg", dir=str(out_dir))
     os.close(fd)
     try:
-        kw = dict(quality=opts.quality, subsampling=0, optimize=True)
+        kw = dict(quality=opts.quality, subsampling=0, optimize=True, comment=(SIG_PREFIX + sig).encode("ascii"))
         if icc:
             kw["icc_profile"] = icc
         canvas.save(tmp, "JPEG", **kw)  # no EXIF is written to the output
