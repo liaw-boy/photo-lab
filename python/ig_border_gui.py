@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Desktop GUI for ig_border: photo strip, live preview, batch processing."""
 import copy
+import hashlib
 import json
 import math
 import os
 import re
 import queue
+import stat
 import subprocess
 import sys
 import tempfile
@@ -289,6 +291,124 @@ SCROLLBAR = dict(scrollbar_button_color=("#b4b9c4", "#5a5f69"), scrollbar_button
 def _pill_font(size):
     f = ig_border._cjk_font(size)
     return f or ig_border._font(size, True, "auto")
+
+
+def updown_icon(rgb, w=10, h=15, ss=8):
+    """macOS-style pop-up indicator: two small chevrons, one pointing up and one down (smooth, rounded caps)."""
+    img = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    lw = round(1.7 * ss)
+    cx, mid = w * ss / 2, h * ss / 2
+    arm, gap = 3.0 * ss, 1.6 * ss                    # half-width of a chevron and the gap between the two
+    for sign in (-1, 1):                              # -1: upper chevron (points up), +1: lower (points down)
+        tip_y = mid + sign * (gap + arm)
+        base_y = mid + sign * gap
+        pts = [(cx - arm, base_y), (cx, tip_y), (cx + arm, base_y)]
+        d.line(pts, fill=rgb + (255,), width=lw, joint="curve")
+        for x, y in pts[::2]:                         # round caps
+            d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=rgb + (255,))
+    return img.resize((w * 3, h * 3), Image.LANCZOS)  # 3x for Retina; shown at (w, h) points
+
+
+_SELECT_ICON = None
+
+
+def select_icon():
+    """CTkImage for the 選擇 buttons: dark glyph on light mode, light glyph on dark mode."""
+    global _SELECT_ICON
+    if _SELECT_ICON is None:
+        _SELECT_ICON = ctk.CTkImage(light_image=updown_icon((38, 38, 42)), dark_image=updown_icon((236, 230, 222)),
+                                    size=(10, 15))
+    return _SELECT_ICON
+
+
+# ---- persistent thumbnail cache --------------------------------------------------------------------------------
+# Thumbnails are small JPEGs keyed by a hash of (path, mtime, size, thumbnail size), so a folder opens instantly the
+# second time (reading 119 photos from an external disk took ~10 s). Nothing in a file name comes from user text, the
+# directory is private (0700), a cache problem never blocks the app, and the folder is pruned when it grows.
+THUMB_CACHE_DIR = (Path.home() / "Library" / "Caches" / "Photo_Lab" / "thumbs" if sys.platform == "darwin"
+                   else Path.home() / ".cache" / "photo_lab" / "thumbs")
+THUMB_CACHE_VERSION = "1"
+THUMB_CACHE_MAX_FILES = 8000
+THUMB_CACHE_MAX_BYTES = 1_000_000          # a cached thumbnail larger than this is not trusted
+
+
+def thumb_cache_file(path):
+    """Cache file for `path` (None if it cannot be stat-ed). Includes mtime and size, so edits invalidate it."""
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return None
+    key = "%s|%d|%d|%dx%d|v%s" % (path, st.st_mtime_ns, st.st_size, THUMB[0], THUMB[1], THUMB_CACHE_VERSION)
+    return THUMB_CACHE_DIR / (hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:40] + ".jpg")
+
+
+def thumb_cache_load(path):
+    f = thumb_cache_file(path)
+    if f is None:
+        return None
+    try:
+        if f.stat().st_size > THUMB_CACHE_MAX_BYTES:
+            return None
+        with Image.open(f, formats=["JPEG"]) as im:
+            if im.width > THUMB[0] or im.height > THUMB[1]:
+                return None
+            return im.convert("RGB")
+    except (OSError, ValueError, SyntaxError):
+        return None
+
+
+def thumb_cache_dir_ok():
+    """Create the cache folder if needed and make sure it is a real directory that belongs to us and is private
+    (an existing folder with other permissions is tightened; a symlink or a foreign owner disables the cache)."""
+    try:
+        THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        st = THUMB_CACHE_DIR.lstat()
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            return False
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            return False
+        if st.st_mode & 0o077:
+            os.chmod(THUMB_CACHE_DIR, 0o700)
+        return True
+    except OSError:
+        return False
+
+
+def thumb_cache_store(path, thumb):
+    f = thumb_cache_file(path)
+    if f is None:
+        return
+    tmp = None
+    try:
+        if not thumb_cache_dir_ok():
+            return
+        fd, tmp = tempfile.mkstemp(prefix=".tmp_", suffix=".jpg", dir=str(THUMB_CACHE_DIR))
+        os.close(fd)
+        thumb.convert("RGB").save(tmp, "JPEG", quality=90)
+        os.replace(tmp, f)
+        tmp = None
+    except OSError:
+        pass
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def thumb_cache_prune():
+    """Keep the folder bounded: when it holds too many files, delete the oldest fifth."""
+    try:
+        files = [p for p in THUMB_CACHE_DIR.iterdir() if p.suffix == ".jpg"]
+        if len(files) <= THUMB_CACHE_MAX_FILES:
+            return
+        files.sort(key=lambda p: p.stat().st_mtime)
+        for p in files[:len(files) // 5]:
+            p.unlink()
+    except OSError:
+        pass
 
 
 def status_pill(base, state):
@@ -1395,7 +1515,8 @@ class App(_Base):
         sf.columnconfigure(0, weight=1)
         self.src_label = ctk.CTkLabel(sf, text="", anchor="w", height=34, corner_radius=10, fg_color=BTN)
         self.src_label.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.src_choose = ctk.CTkButton(sf, text="選擇 ▾", width=78, height=34, corner_radius=10, fg_color=BTN,
+        self.src_choose = ctk.CTkButton(sf, text="選擇", image=select_icon(), compound="right", width=84, height=34,
+                                        corner_radius=10, fg_color=BTN,
                                         hover_color=BTN_HOVER, text_color=("gray10", "gray95"),
                                         command=lambda: self.show_pick_menu(self.src_choose))
         self.src_choose.grid(row=0, column=1)
@@ -1591,7 +1712,8 @@ class App(_Base):
         var.trace_add("write", lambda *a: ent.after(20, show_end))
         ent.after(300, show_end)
         ent.bind("<FocusOut>", lambda e: ent.after(20, show_end), add="+")
-        btn = ctk.CTkButton(f, text="選擇 ▾", width=78, height=34, corner_radius=10, fg_color=BTN,
+        btn = ctk.CTkButton(f, text="選擇", image=select_icon(), compound="right", width=84, height=34,
+                            corner_radius=10, fg_color=BTN,
                             hover_color=BTN_HOVER, text_color=("gray10", "gray95"))
         btn.configure(command=lambda: self.show_source_menu(var, which, btn, cmd))
         btn.grid(row=0, column=2)
@@ -2634,19 +2756,22 @@ class App(_Base):
 
     # thumbnails (one background thread; the UI thread only builds the CTkImage)
     def thumb_worker(self):
+        thumb_cache_prune()
         while True:
             item = self.thumb_q.get()
             if item is None:
                 return
             p, mt = item
-            thumb = None
-            try:
-                with ig_border.open_image(p, 320) as im:      # JPEG: decoded at reduced size
-                    im = ig_border._to_rgb(ImageOps.exif_transpose(im))
-                    im.thumbnail(THUMB, Image.LANCZOS)
-                    thumb = im.copy()
-            except Exception:
-                thumb = None
+            thumb = thumb_cache_load(p)
+            if thumb is None:
+                try:
+                    with ig_border.open_image(p, 320) as im:      # JPEG: decoded at reduced size
+                        im = ig_border._to_rgb(ImageOps.exif_transpose(im))
+                        im.thumbnail(THUMB, Image.LANCZOS)
+                        thumb = im.copy()
+                    thumb_cache_store(p, thumb)
+                except Exception:
+                    thumb = None
             self.msg_q.put(("thumb", p, mt, thumb))
 
     def on_thumb(self, p, mt, pil):

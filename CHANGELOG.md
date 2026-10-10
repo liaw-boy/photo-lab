@@ -3,6 +3,12 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 0.3.1 — 2026-10-10
+- 選擇 buttons: the little ▾ is replaced by a drawn macOS-style up/down chevron icon (crisp on Retina).
+- Persistent thumbnail cache (`~/Library/Caches/Photo_Lab/thumbs`, private 0700, JPEG ~7 KB each, keyed by
+  path + mtime + size + thumbnail size, pruned above 8000 files): a folder of 119 photos on an external disk
+  opens in 0.24 s instead of ~9 s the second time. Safe to delete at any time.
+
 ## 0.3.0 — 2026-10-10
 - Rounded corners are an independent switch: background 白底 / 模糊 and 圓角 on/off combine freely (new
   blurred-background + square-corners style `blur_square`). Old settings and presets are converted.
