@@ -22,7 +22,7 @@ try:
 except ImportError:      # live light/dark switching of the tiles is a nicety, not a requirement
     class AppearanceModeTracker:
         add = remove = staticmethod(lambda *a, **k: None)
-from PIL import Image, ImageDraw, ImageOps, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageTk
 
 import ig_border
 
@@ -37,7 +37,11 @@ RATIOS = [("原始", "original"), ("平均", "even"), ("1:1", "1:1"), ("2:3", "2
           ("4:5", "4:5"), ("3:4", "3:4"), ("5:4", "5:4"), ("9:16", "9:16"), ("16:9", "16:9")]
 LAYOUT_LABELS = {"經典三欄": "classic3", "置中單行": "center1", "置中兩行": "center2", "左右分開": "split",
                  "只放 logo": "logo", "自訂樣式": "custom"}
-STYLE_LABELS = {"白底": "white", "圓角": "rounded", "模糊": "blur"}
+STYLE_LABELS = {"白底": "white", "圓角": "rounded", "模糊": "blur"}      # legacy codes (old settings / presets)
+BG_LABELS = {"白底": "white", "模糊": "blur"}                              # background; rounded corners are separate
+FRAME_STYLE = {("white", False): "white", ("white", True): "rounded", ("blur", True): "blur",
+               ("blur", False): "blur_square"}
+STYLE_PARTS = {v: k for k, v in FRAME_STYLE.items()}                      # code -> (background, rounded)
 FIELD_LABELS = [("相機", "camera"), ("鏡頭", "lens"), ("拍攝參數", "exposure"), ("日期", "date")]
 DATE_LABELS = {"2026.05.25": "ymd_dot", "2026-05-25": "ymd_dash", "2026/05/25": "ymd_slash",
                "25 May 2026": "dmy_text", "May 25, 2026": "mdy_text",
@@ -151,7 +155,8 @@ RED = "#e5484d"
 RED_HOVER = "#cf3a3f"
 # Status shown on a thumbnail while exporting. It is drawn INTO the thumbnail as a small translucent pill
 # (a widget laid over an image cannot have transparent rounded corners).
-STATE_TEXT = {"待處理": "", "已有輸出": "", "處理中": "處理中", "完成": "完成", "略過": "略過", "失敗": "失敗"}
+STATE_TEXT = {"待處理": "", "已有輸出": "", "處理中": "匯出中",   # internal keys stay; the pill says 匯出中
+               "完成": "完成", "略過": "略過", "失敗": "失敗"}
 PILL_COLORS = {"完成": (96, 210, 128), "失敗": (255, 112, 112), "略過": (244, 180, 78), "處理中": (118, 172, 255),
                "已有輸出": (205, 210, 220)}
 
@@ -415,7 +420,7 @@ class StyleEditor(ctk.CTkToplevel):
         try:
             footer = ig_border.make_footer(src, Namespace(**app.footer_opts()), info=info)
             canvas = ig_border.build_canvas(src, "even", round(app.thick_var.get()), 0, footer,
-                                            STYLE_LABELS.get(app.style_var.get(), "white"))
+                                            app.frame_style())
         except Exception:
             return
         w, h = canvas.size
@@ -1109,6 +1114,8 @@ class App(_Base):
         self.hq_pending = False
         self.view_job = None
         self.view = None
+        self._glow_key, self._glow_mask = None, None
+        self.glow_on = True                                   # soft ambient glow behind the photo in the preview
         self.drag = None
         self.zoom = 1.0              # 1.0 = fit to window
         self.cxn = self.cyn = 0.5    # view centre, normalised (0-1) so it survives canvas swaps
@@ -1149,7 +1156,11 @@ class App(_Base):
         self.thick_var = tk.DoubleVar(value=self.num(cfg.get("thickness"), 0, 50, 10.0))
         self.footer_on = tk.BooleanVar(value=cfg.get("footer") is True)
         self.layout_var = tk.StringVar(value=self.choice(cfg.get("footer_layout"), LAYOUT_LABELS, "經典三欄"))
-        self.style_var = tk.StringVar(value=self.choice(cfg.get("style"), STYLE_LABELS, "白底"))
+        old_style = self.choice(cfg.get("style"), STYLE_LABELS, "白底")        # old files stored 白底 / 圓角 / 模糊
+        self.style_var = tk.StringVar(value="白底" if old_style == "圓角" else old_style)
+        legacy_round = old_style in ("圓角", "模糊")                          # the old 模糊 always had rounded corners
+        self.round_var = tk.BooleanVar(value=cfg.get("rounded") if isinstance(cfg.get("rounded"), bool)
+                                       else legacy_round)
         self.divider_var = tk.BooleanVar(value=cfg.get("footer_divider") is True)
         self.cdivider_var = tk.BooleanVar(value=cfg.get("footer_center_divider") is not False)   # centred layouts: "|"
         self.overwrite_var = tk.BooleanVar(value=cfg.get("overwrite") is True)
@@ -1415,11 +1426,13 @@ class App(_Base):
         ctk.CTkSlider(c2, from_=0, to=50, number_of_steps=50, variable=self.thick_var, height=18,
                       button_color=ACCENT, button_hover_color=ACCENT_HOVER, progress_color=ACCENT,
                       command=self.on_thick).grid(row=3, column=0, sticky="ew", padx=16, pady=(6, 12))
-        ctk.CTkSegmentedButton(c2, values=list(STYLE_LABELS), variable=self.style_var, height=32,
+        ctk.CTkSegmentedButton(c2, values=list(BG_LABELS), variable=self.style_var, height=32,
                                corner_radius=10, selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
                                unselected_color=BTN, unselected_hover_color=BTN_HOVER,
                                text_color=("gray10", "gray95"), command=lambda v: self.schedule_preview()
-                               ).grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 16))
+                               ).grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 10))
+        ctk.CTkSwitch(c2, text="圓角", variable=self.round_var, progress_color=ACCENT,
+                      command=self.schedule_preview).grid(row=5, column=0, sticky="w", padx=16, pady=(0, 16))
         self.on_thick()
 
         # camera info
@@ -1729,7 +1742,8 @@ class App(_Base):
                      text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12))
         self.sel_btn = ctk.CTkButton(head, text="全選", width=78, command=self.toggle_all, **small)   # 全選 <-> 取消全選
         self.sel_btn.grid(row=0, column=1, padx=(6, 0))
-        ctk.CTkButton(head, text="重設", width=64, command=self.reload, **small).grid(row=0, column=2, padx=(6, 0))
+        ctk.CTkButton(head, text="重設", width=64, command=self.reset_selection, **small
+                      ).grid(row=0, column=2, padx=(6, 0))
         self.run_btn = ctk.CTkButton(head, text=self.run_label(), width=150, height=36, corner_radius=18,
                                      font=ctk.CTkFont(size=15, weight="bold"), fg_color=ACCENT,
                                      hover_color=ACCENT_HOVER, text_color="white", command=self.process_selected)
@@ -1765,7 +1779,8 @@ class App(_Base):
                 "output": self.out_var.get(), "ratio": self.ratio,
                 "size": self.size_var.get(), "thickness": round(self.thick_var.get(), 1),
                 "footer": bool(self.footer_on.get()), "footer_layout": self.layout_var.get(),
-                "style": self.style_var.get(), "footer_divider": bool(self.divider_var.get()),
+                "style": self.style_var.get(), "rounded": bool(self.round_var.get()),
+                "footer_divider": bool(self.divider_var.get()),
                 "footer_center_divider": bool(self.cdivider_var.get()),
                 "overwrite": bool(self.overwrite_var.get()),
                 "footer_fields": [k for k, v in self.field_vars.items() if v.get()],
@@ -1965,7 +1980,7 @@ class App(_Base):
         if name == THEME:
             return
         if self.batch and self.batch.is_alive():
-            messagebox.showinfo("處理中", "還有照片正在處理，請等處理完再切換配色。")
+            messagebox.showinfo("匯出中", "還有照片正在匯出，請等匯出完再切換配色。")
             self.theme_var.set(PALETTES[THEME]["label"])
             return
         if not messagebox.askyesno("切換配色", "切換配色需要重新啟動程式（設定會保留）。現在重新啟動嗎？"):
@@ -2004,6 +2019,11 @@ class App(_Base):
             self.iconphoto(True, self.app_icon)
         except (OSError, tk.TclError, ValueError):
             pass
+
+    def frame_style(self):
+        """The style code the renderer takes, from the background choice and the rounded-corners switch."""
+        bg = BG_LABELS.get(self.style_var.get(), "white")
+        return FRAME_STYLE[(bg, bool(self.round_var.get()))]
 
     def toggle_advanced(self):
         self.adv_open = not self.adv_open
@@ -2403,6 +2423,21 @@ class App(_Base):
         self.refresh_photos(force=True)
         self.scan_sources()
 
+    def reset_selection(self):
+        """重設: tick every photo again, clear the 完成 / 失敗 / 略過 marks and re-read the folder.
+        (Not while exporting: the marks belong to the running job.)"""
+        if self.batch is not None and self.batch.is_alive():
+            self.set_status("匯出中，無法重設", AMBER)
+            return
+        self.refresh_photos(force=True)
+        for p in self.photos:
+            self.states.pop(p, None)
+            self.checked[p].set(True)
+        self.refresh_states()
+        self.update_count()
+        self.scan_sources()
+        self.set_status("已重設：全部勾選，狀態標記已清除", GREEN)
+
     def out_changed(self):
         self.refresh_states()
         self.scan_sources()          # the "already exported" counts of the sources depend on the output folder
@@ -2648,7 +2683,7 @@ class App(_Base):
 
     def params_key(self):
         fo = self.footer_opts()
-        return (self.ratio, round(self.thick_var.get()), STYLE_LABELS.get(self.style_var.get(), "white"),
+        return (self.ratio, round(self.thick_var.get()), self.frame_style(),
                 SIZE_LABELS.get(self.size_var.get(), 2048), tuple((k, str(v)) for k, v in sorted(fo.items())),
                 str(self.preview_path), self.preview_mtime)
 
@@ -2688,7 +2723,7 @@ class App(_Base):
         info = ig_border.SAMPLE_INFO if self.preview_info is None else self.preview_info
         footer = ig_border.make_footer(src, Namespace(**self.footer_opts()), info=info)
         self.fast_canvas = ig_border.build_canvas(src, self.ratio, round(self.thick_var.get()), 0, footer,
-                                                  STYLE_LABELS.get(self.style_var.get(), "white"))
+                                                  self.frame_style())
         self.last_fast = time.monotonic()
         self.hq_canvas = None            # parameters changed: the real render is stale
         if interactive:
@@ -2716,7 +2751,7 @@ class App(_Base):
             return
         job = {"key": self.params_key(), "path": self.preview_path, "ratio": self.ratio,
                "thick": round(self.thick_var.get()), "max_edge": SIZE_LABELS.get(self.size_var.get(), 2048),
-               "style": STYLE_LABELS.get(self.style_var.get(), "white"), "footer": self.footer_opts()}
+               "style": self.frame_style(), "footer": self.footer_opts()}
         self.hq_running, self.hq_pending = True, False
         threading.Thread(target=self.hq_worker, args=(job,), daemon=True).start()
 
@@ -2796,7 +2831,9 @@ class App(_Base):
             else:
                 crop = crop.resize(size, Image.BICUBIC)
         fitted = self.zoom <= 1.0001
-        if fitted:
+        if fitted and (self.compare or self.frame_style() in ("white", "rounded")):
+            # preview-only hairline that separates a white canvas from the dark preview area; a blurred background
+            # has no such edge, and the line would look like a white ring around it
             crop = ImageOps.expand(crop, border=1, fill=(150, 150, 150))
         self.view = (scale, cw, ch, box_w, box_h)
         self.view_ext = (vw / cw, vh / ch)
@@ -2814,12 +2851,48 @@ class App(_Base):
         except (tk.TclError, AttributeError):
             return PV_BG[1]
 
+    def glow_mask(self, w, h):
+        """Soft elliptical falloff (L image, label size), built small and scaled up; cached for the current size."""
+        key = (w, h)
+        if self._glow_key != key:
+            sw, sh = max(8, w // 6), max(8, h // 6)
+            m = Image.new("L", (sw, sh), 0)
+            ImageDraw.Draw(m).ellipse((sw * 0.12, sh * 0.10, sw * 0.88, sh * 0.90), fill=255)
+            m = m.filter(ImageFilter.GaussianBlur(max(sw, sh) * 0.13))
+            m = m.resize((w, h), Image.BICUBIC).point(lambda v: round(v * 0.55))
+            self._glow_mask, self._glow_key = m, key
+        return self._glow_mask
+
+    def with_glow(self, im, bg_hex):
+        """`im` centred on a label-sized background that carries a soft glow in the photo's own average colour
+        (like the ambient light of a lit print). Only for dark preview backgrounds and when the image does not
+        fill the whole area."""
+        lw, lh = self.preview_lbl.winfo_width(), self.preview_lbl.winfo_height()
+        if lw < 60 or lh < 60 or (im.width >= lw - 2 and im.height >= lh - 2):
+            return im
+        try:
+            base = tuple(int(bg_hex[i:i + 2], 16) for i in (1, 3, 5))
+        except (ValueError, IndexError):
+            return im
+        if sum(base) > 300:                                   # light preview background: no glow
+            return im
+        r, g, b = im.resize((1, 1), Image.BOX).getpixel((0, 0))[:3]
+        top = max(r, g, b, 1)
+        k = min(2.4, 210 / top)                               # lift dim photos so the glow stays visible
+        tint = (min(255, round(r * k)), min(255, round(g * k)), min(255, round(b * k)))
+        out = Image.new("RGB", (lw, lh), base)
+        out.paste(Image.new("RGB", (lw, lh), tint), (0, 0), self.glow_mask(lw, lh))
+        out.paste(im, ((lw - im.width) // 2, (lh - im.height) // 2))
+        return out
+
     def show_image(self, im):
         """Show a PIL image in the preview, reusing the PhotoImage when the size is unchanged (no allocations)."""
         bg = self.preview_bg()
         if bg != self.preview_bg_cache:
             self.preview_lbl.configure(bg=bg)
             self.preview_bg_cache = bg
+        if self.glow_on:
+            im = self.with_glow(im, bg)
         ph = self.preview_photo
         if ph is not None and ph.width() == im.width and ph.height() == im.height:
             ph.paste(im)
@@ -2994,7 +3067,7 @@ class App(_Base):
     def collect_settings(self):
         fo = self.footer_opts()
         return {"ratio": self.ratio, "thickness": round(self.thick_var.get()),
-                "style": STYLE_LABELS.get(self.style_var.get(), "white"), "size": self.size_var.get(),
+                "style": self.frame_style(), "size": self.size_var.get(),
                 "footer": fo["footer"], "layout": fo["footer_layout"], "fields": fo["footer_fields"],
                 "divider": fo["footer_divider"], "center_divider": fo["footer_center_divider"],
                 "text_scale": round(self.text_scale.get()),
@@ -3015,8 +3088,10 @@ class App(_Base):
             self.refresh_ratio_buttons()
         if "thickness" in d:
             self.thick_var.set(self.num(d["thickness"], 0, 50, 10))
-        if self.choice(d.get("style"), STYLE_LABELS.values(), None):
-            self.style_var.set(self.label_of(STYLE_LABELS, d["style"], "白底"))
+        if isinstance(d.get("style"), str) and d["style"] in STYLE_PARTS:
+            bg, rounded = STYLE_PARTS[d["style"]]
+            self.style_var.set(self.label_of(BG_LABELS, bg, "白底"))
+            self.round_var.set(rounded)
         if self.choice(d.get("size"), SIZE_LABELS, None):
             self.size_var.set(d["size"])
         if "footer" in d:
@@ -3230,7 +3305,7 @@ class App(_Base):
         elif kind == "progress":
             done, total = rest
             self.progress.set(done / max(1, total))
-            self.set_status("處理中 %d / %d" % (done, total), ACCENT)
+            self.set_status("匯出中 %d / %d" % (done, total), ACCENT)
         elif kind == "batch_done":
             self.on_batch_done(*rest)
         elif kind == "thumb":
@@ -3250,7 +3325,7 @@ class App(_Base):
             opts = Namespace(ratio=self.ratio, thickness=round(float(self.thick_var.get()), 1),
                              max_edge=SIZE_LABELS[self.size_var.get()], quality=95,
                              overwrite=bool(self.overwrite_var.get()),
-                             style=STYLE_LABELS[self.style_var.get()], **self.footer_opts())
+                             style=self.frame_style(), **self.footer_opts())
         except (ValueError, KeyError, tk.TclError, OSError):
             messagebox.showerror("錯誤", "請檢查資料夾與設定")
             return None
@@ -3331,7 +3406,7 @@ class App(_Base):
         self.run_btn.configure(text="停止匯出", fg_color=RED, hover_color=RED_HOVER)
         self.progress.set(0)
         self.progress.grid()
-        self.set_status("處理中 0 / %d" % len(paths), ACCENT)
+        self.set_status("匯出中 0 / %d" % len(paths), ACCENT)
 
     def batch_worker(self, paths, out, opts, names):
         count = {"done": 0, "skip": 0, "fail": 0}
@@ -3347,7 +3422,7 @@ class App(_Base):
         self.scan_sources()
         self.run_btn.configure(text=self.run_label(), fg_color=ACCENT, hover_color=ACCENT_HOVER)
         self.progress.grid_remove()
-        text = "%s：完成 %d 張" % ("已停止" if stopped else "處理結束", done)
+        text = "%s：完成 %d 張" % ("已停止" if stopped else "匯出結束", done)
         if skip:
             text += "・略過 %d 張（輸出已存在）" % skip
         if fail:
@@ -3358,7 +3433,7 @@ class App(_Base):
 
     def on_close(self):
         if self.batch and self.batch.is_alive():
-            if not messagebox.askyesno("還在處理", "還有照片正在處理，確定要關閉嗎？"):
+            if not messagebox.askyesno("還在匯出", "還有照片正在匯出，確定要關閉嗎？"):
                 return
         self.batch_stop.set()
         self.thumb_q.put(None)

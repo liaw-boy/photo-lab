@@ -3,6 +3,17 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 0.3.0 — 2026-10-10
+- Rounded corners are an independent switch: background 白底 / 模糊 and 圓角 on/off combine freely (new
+  blurred-background + square-corners style `blur_square`). Old settings and presets are converted.
+- Preview: the 1 px grey outline is only drawn for white backgrounds (it looked like a white ring around the
+  blurred background; it was never part of the exported file).
+- Wording unified: export (匯出) instead of 處理 in the status line, dialogs and the status pill.
+- Preview: soft ambient glow behind the photo, tinted with the photo's own average colour (dark themes, when
+  the image does not fill the preview area).
+- 重設 now ticks every photo again, clears the 完成 / 失敗 / 略過 marks and re-reads the folder
+  (it used to only re-read the folder).
+
 ## 0.2.0 — 2026-10-10
 - Python app moved to `python/`; `logos/`, `fonts/`, `styles/`, `assets/` shared at the repo root.
 - Batch export faster (no fixed per-photo wait), stop works while waiting, failure reason shown.

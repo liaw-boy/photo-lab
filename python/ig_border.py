@@ -46,7 +46,9 @@ RATIOS = {"1:1": (1, 1), "2:3": (2, 3), "3:2": (3, 2), "4:5": (4, 5),
 RATIO_CHOICES = ["original", "even"] + list(RATIOS)
 WHITE = (255, 255, 255)
 PAD_DIVISOR = 200.0  # thickness 10 -> 5% of the long edge (measured from LR mobile output)
-STYLES = ["white", "rounded", "blur"]
+# background x corners: white = white + square, rounded = white + rounded, blur = blurred + rounded,
+# blur_square = blurred + square
+STYLES = ["white", "rounded", "blur", "blur_square"]
 CORNER = 0.012        # corner radius as a fraction of the photo's long edge (rounded / blur)
 
 # ---- footer (camera info) ----
@@ -942,7 +944,8 @@ def build_canvas(img, ratio, thickness, max_edge, footer=None, style="white"):
         style = "white"
     base_band = round(long_edge * FOOTER_H)
     band_h = round(base_band * footer.get("height_scale", 1.0)) if footer else base_band
-    theme = THEME_LIGHT_TEXT if style == "blur" else THEME_DARK_TEXT
+    is_blur = style in ("blur", "blur_square")
+    theme = THEME_LIGHT_TEXT if is_blur else THEME_DARK_TEXT
     parts = render_footer(footer, base_band, theme) if footer else None
     if ratio == "original" and not parts and style == "white":
         return img
@@ -964,14 +967,17 @@ def build_canvas(img, ratio, thickness, max_edge, footer=None, style="white"):
         else:
             ch = round(cw / target)
 
-    canvas = _blur_background(img, cw, ch) if style == "blur" else Image.new("RGB", (cw, ch), WHITE)
+    canvas = _blur_background(img, cw, ch) if is_blur else Image.new("RGB", (cw, ch), WHITE)
     ox, oy = (cw - bw) // 2, (ch - bh) // 2
     px, py = ox + pad, oy + pad
     if style == "white":
         canvas.paste(img, (px, py))
+    elif style == "blur_square":                       # blurred background, square photo (shadow only)
+        _shadow(canvas, (px, py, w, h), 0, long_edge, 0.50)
+        canvas.paste(img, (px, py))
     else:
         r = max(2, round(long_edge * CORNER))
-        _shadow(canvas, (px, py, w, h), r, long_edge, 0.50 if style == "blur" else 0.22)
+        _shadow(canvas, (px, py, w, h), r, long_edge, 0.50 if is_blur else 0.22)
         canvas.paste(img, (px, py), _rounded_mask((w, h), r))
 
     if parts:
