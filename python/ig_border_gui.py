@@ -116,7 +116,9 @@ PREVIEW_SRC_EDGE = 1800  # preview works on a reduced copy; padding is proportio
 MAX_SCALE = 4.0          # maximum zoom: 400% of the rendered canvas pixels
 ZOOM_MIN = 0.2           # minimum zoom, relative to "fit to window" (fit = 1.0)
 MAX_PHOTOS = 300         # the strip lists at most this many photos
-THUMB = (150, 112)
+THUMB = (240, 180)          # decoded / cached thumbnail; tiles show it scaled to the chosen strip height
+THUMB_H_MIN, THUMB_H_MAX, THUMB_H_DEFAULT = 56, 180, 112     # displayed thumbnail height (px)
+STRIP_EXTRA = 74            # strip height = thumbnail height + name row, padding and the scrollbar
 
 # Two colour sets (light, dark): "darkroom" = warm black with a safelight-amber accent (default), "carbon" = neutral
 # charcoal with a blue accent. The accent is a deep amber so that white text on it stays readable. The choice is stored
@@ -879,11 +881,12 @@ class PhotoTile(tk.Canvas):
     every layout pass took seconds on macOS - 75 tiles ~7 s, 150 tiles ~48 s. This is one window.)"""
 
     PAD = 6
-    W = THUMB[0] + 2 * PAD
-    H = PAD + THUMB[1] + 6 + 20 + PAD
     BOX = 16
 
-    def __init__(self, master, name, var, photo, on_select, on_menu, on_check):
+    def __init__(self, master, name, var, photo, on_select, on_menu, on_check, size):
+        self.tw, self.th = size                                   # displayed thumbnail size
+        self.W = self.tw + 2 * self.PAD
+        self.H = self.PAD + self.th + 6 + 20 + self.PAD
         super().__init__(master, width=self.W, height=self.H, highlightthickness=0, bd=0,
                          bg=resolve_color(CARD))
         self.name, self.var, self.photo = name, var, photo
@@ -925,7 +928,7 @@ class PhotoTile(tk.Canvas):
         self.delete("all")
         self.create_polygon(round_rect_points(1, 1, self.W - 1, self.H - 1, 10), smooth=True, tags="bg",
                             fill=resolve_color(BTN), outline=resolve_color(ACCENT if self.selected else BTN), width=2)
-        self.create_image(self.W // 2, self.PAD + THUMB[1] // 2, image=self.photo, tags="photo")
+        self.create_image(self.W // 2, self.PAD + self.th // 2, image=self.photo, tags="photo")
         x, y = self.box_xy
         self.create_text(x + self.BOX + 6, y + self.BOX // 2, text=self.name, anchor="w", font=self.font,
                          fill=resolve_color(MUTED), tags="name")
@@ -967,7 +970,7 @@ class PhotoTile(tk.Canvas):
         tw = f.measure(text)
         H, PADX, ICON, GAP = 20, 8, 10, 5
         W = PADX * 2 + ICON + GAP + tw
-        x0, y1 = self.PAD + 7, self.PAD + THUMB[1] - 7
+        x0, y1 = self.PAD + 7, self.PAD + self.th - 7
         y0 = y1 - H
         self.create_polygon(round_rect_points(x0, y0, x0 + W, y1, H // 2), smooth=True, fill="#14161a",
                             outline="", tags="pill")
@@ -1334,7 +1337,8 @@ class App(_Base):
                 ctk.CTkImage(light_image=ratio_icon(val, (55, 60, 70, 255)),
                              dark_image=ratio_icon(val, (225, 228, 235, 255)), size=(28, 28)),
                 ctk.CTkImage(ratio_icon(val, (255, 255, 255, 255)), size=(28, 28)))
-        self.placeholder_thumb = ImageTk.PhotoImage(Image.new("RGB", THUMB, THUMB_BG))
+        self.thumb_h = int(round(self.num(cfg.get("thumb_h"), THUMB_H_MIN, THUMB_H_MAX, THUMB_H_DEFAULT)))
+        self.placeholder_thumb = ImageTk.PhotoImage(Image.new("RGB", self.thumb_size(), THUMB_BG))
 
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
@@ -1406,7 +1410,7 @@ class App(_Base):
     def num(value, lo, hi, default):
         try:
             v = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):     # OverflowError: a huge integer in a hand-edited file
             return default
         return min(hi, max(lo, v)) if v == v else default
 
@@ -1794,7 +1798,7 @@ class App(_Base):
         right.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=16)
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=6)
-        right.rowconfigure(2, weight=0, minsize=214)
+        right.rowconfigure(3, weight=0, minsize=self.thumb_h + STRIP_EXTRA + 8)
 
         pv = ctk.CTkFrame(right, corner_radius=16, fg_color=PV_BG)
         pv.grid(row=0, column=0, sticky="nsew")
@@ -1855,8 +1859,19 @@ class App(_Base):
         ctk.CTkLabel(pv, text="雙指滑動：平移　⌘＋滑動：縮放　雙擊：100% / 適合視窗　按住 \\ ：對照原圖",
                      text_color=MUTED, font=ctk.CTkFont(size=11)).grid(row=2, column=0, pady=(0, 8))
 
+        self.right_area = right
+        self.thumb_job = None
+        self.split_y = self.split_h = 0
+        split = ctk.CTkFrame(right, height=14, fg_color="transparent", cursor="sb_v_double_arrow")
+        split.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        grip = ctk.CTkFrame(split, width=56, height=4, corner_radius=2, fg_color=BTN_HOVER, cursor="sb_v_double_arrow")
+        grip.place(relx=0.5, rely=0.5, anchor="center")
+        for w in (split, grip):                       # drag to resize the thumbnail strip (thumbnails scale with it)
+            w.bind("<ButtonPress-1>", self.split_press)
+            w.bind("<B1-Motion>", self.split_drag)
+
         head = ctk.CTkFrame(right, fg_color="transparent")
-        head.grid(row=1, column=0, sticky="ew", pady=(12, 6))
+        head.grid(row=2, column=0, sticky="ew", pady=(2, 6))
         head.columnconfigure(0, weight=1)
         self.count_lbl = ctk.CTkLabel(head, text="尚未加入來源", anchor="w", font=ctk.CTkFont(size=14, weight="bold"))
         self.count_lbl.grid(row=0, column=0, sticky="w")
@@ -1871,9 +1886,9 @@ class App(_Base):
                                      hover_color=ACCENT_HOVER, text_color="white", command=self.process_selected)
         self.run_btn.grid(row=0, column=3, padx=(14, 0))
 
-        self.strip = SmoothScrollFrame(right, orientation="horizontal", corner_radius=14, fg_color=CARD, height=176,
-                                       **SCROLLBAR)
-        self.strip.grid(row=2, column=0, sticky="nsew")
+        self.strip = SmoothScrollFrame(right, orientation="horizontal", corner_radius=14, fg_color=CARD,
+                                       height=self.thumb_h + STRIP_EXTRA, **SCROLLBAR)
+        self.strip.grid(row=3, column=0, sticky="nsew")
         if HAVE_DND:
             for target in (self.strip._parent_canvas, self.preview_lbl):
                 try:
@@ -1913,7 +1928,7 @@ class App(_Base):
                 "logo_pos": LOGO_POS_LABELS.get(self.logopos_var.get(), "left"),
                 "custom_text": self.clean_text(self.custom_text_var.get()),
                 "lens_main": bool(self.main_var.get()), "mirror": bool(self.mirror_var.get()),
-                "advanced_open": bool(self.adv_open), "theme": THEME,
+                "advanced_open": bool(self.adv_open), "theme": THEME, "thumb_h": self.thumb_h,
                 "exposure_items": [k for k, v in self.exp_vars.items() if v.get()],
                 "exposure_order": EXPO_ORDER_LABELS.get(self.exporder_var.get(), "std"),
                 "font": self.font_labels.get(self.font_var.get(), "auto"),
@@ -2653,6 +2668,38 @@ class App(_Base):
             else:
                 self.empty_lbl.configure(text=msg)
 
+    def thumb_size(self):
+        return (round(self.thumb_h * THUMB[0] / THUMB[1]), self.thumb_h)
+
+    def set_thumb_h(self, h):
+        """Strip height changed (splitter drag): resize the strip now, the tiles a moment later."""
+        h = max(THUMB_H_MIN, min(THUMB_H_MAX, round(h)))
+        if h == self.thumb_h:
+            return
+        self.thumb_h = h
+        self.strip.configure(height=h + STRIP_EXTRA)
+        self.right_area.rowconfigure(3, minsize=h + STRIP_EXTRA + 8)
+        if self.thumb_job:
+            self.after_cancel(self.thumb_job)
+        self.thumb_job = self.after(90, self.apply_thumb_size)
+
+    def apply_thumb_size(self):
+        """Rebuild the tiles at the new size (decoded thumbnails are kept: only a cheap re-scale)."""
+        self.thumb_job = None
+        for p in list(self.tiles):
+            self.tiles.pop(p)["tile"].destroy()
+        self.thumbs.clear()
+        self.badge_shown.clear()
+        self.placeholder_thumb = ImageTk.PhotoImage(Image.new("RGB", self.thumb_size(), THUMB_BG))
+        self.refresh_photos(force=True)
+        self.save_cfg()
+
+    def split_press(self, e):
+        self.split_y, self.split_h = e.y_root, self.thumb_h
+
+    def split_drag(self, e):
+        self.set_thumb_h(self.split_h - (e.y_root - self.split_y))      # drag up = bigger strip
+
     def make_tile(self, p):
         cached = self.thumbs.get(p)                 # a tile that comes back already has its thumbnail and badge
         var = self.checked.get(p) or tk.BooleanVar(value=True)
@@ -2663,7 +2710,8 @@ class App(_Base):
         name = name if len(name) <= 19 else name[:18] + "…"
         tile = PhotoTile(self.strip, name, var, cached[1] if cached else self.placeholder_thumb,
                          on_select=lambda path=p: self.select_photo(path),
-                         on_menu=lambda e, path=p: self.tile_menu(e, path), on_check=self.update_count)
+                         on_menu=lambda e, path=p: self.tile_menu(e, path), on_check=self.update_count,
+                         size=self.thumb_size())
         self.tiles[p] = {"tile": tile}
         tile.set_state(self.states.get(p, "待處理"))
 
@@ -2690,7 +2738,8 @@ class App(_Base):
         if p in self.thumb_base and cached is not None and cached[0] == mt:
             ph = cached[1]                                 # the plain thumbnail did not change: only the pill did
         else:
-            ph = ImageTk.PhotoImage(base)
+            size = self.thumb_size()
+            ph = ImageTk.PhotoImage(base if base.size == size else base.resize(size, Image.LANCZOS))
             self.thumbs[p] = (mt, ph)
         t["tile"].set_photo(ph)
         t["tile"].set_state(state)

@@ -3,6 +3,11 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 0.4.0 — 2026-10-10
+- The thumbnail strip is resizable: drag the small bar between the preview and the strip; the thumbnails scale
+  with it (56–180 px high, remembered). Thumbnails are now decoded / cached at 240x180 so enlarging stays sharp
+  (the cache is rebuilt once).
+
 ## 0.3.1 — 2026-10-10
 - 選擇 buttons: the little ▾ is replaced by a drawn macOS-style up/down chevron icon (crisp on Retina).
 - Persistent thumbnail cache (`~/Library/Caches/Photo_Lab/thumbs`, private 0700, JPEG ~7 KB each, keyed by
