@@ -50,6 +50,16 @@ STYLES = ["white", "rounded", "blur"]
 CORNER = 0.012        # corner radius as a fraction of the photo's long edge (rounded / blur)
 
 # ---- footer (camera info) ----
+def _read_version():
+    """Version string from the VERSION file at the repo root ("0.0.0" if it cannot be read)."""
+    try:
+        text = (Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
+        return text if re.fullmatch(r"\d+\.\d+\.\d+", text) else "0.0.0"
+    except (OSError, ValueError):
+        return "0.0.0"
+
+
+__version__ = _read_version()
 LOGO_DIR = Path(__file__).resolve().parent.parent / "logos"
 FOOTER_LAYOUTS = ["classic3", "center1", "center2", "split", "logo", "custom"]
 FOOTER_FIELDS = ["camera", "lens", "exposure", "date"]

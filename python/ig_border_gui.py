@@ -110,7 +110,7 @@ PREVIEW_SRC_EDGE = 1800  # preview works on a reduced copy; padding is proportio
 MAX_SCALE = 4.0          # maximum zoom: 400% of the rendered canvas pixels
 ZOOM_MIN = 0.2           # minimum zoom, relative to "fit to window" (fit = 1.0)
 MAX_PHOTOS = 300         # the strip lists at most this many photos
-THUMB = (104, 78)
+THUMB = (150, 112)
 
 # Two colour sets (light, dark): "darkroom" = warm black with a safelight-amber accent (default), "carbon" = neutral
 # charcoal with a blue accent. The accent is a deep amber so that white text on it stays readable. The choice is stored
@@ -1082,7 +1082,7 @@ class App(_Base):
                 self.TkdndVersion = TkinterDnD._require(self)
             except Exception:
                 globals()["HAVE_DND"] = False
-        self.title("Photo_Lab")
+        self.title("Photo_Lab v%s" % ig_border.__version__)
         self.configure(fg_color=WINDOW_BG)
         self.set_app_icon()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
@@ -1347,15 +1347,21 @@ class App(_Base):
 
         head = ctk.CTkFrame(left, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", padx=20, pady=(14, 10))
-        head.columnconfigure(0, weight=1)
-        ctk.CTkLabel(head, text="Photo_Lab", font=ctk.CTkFont(size=24, weight="bold")
-                     ).grid(row=0, column=0, sticky="w")
+        head.columnconfigure(1, weight=1)
+        icon_img = self.title_icon()
+        if icon_img is not None:
+            ctk.CTkLabel(head, text="", image=icon_img, width=46, height=46).grid(row=0, column=0, padx=(0, 12))
+        names = ctk.CTkFrame(head, fg_color="transparent")
+        names.grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(names, text="Photo_Lab", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(names, text="v%s" % ig_border.__version__, text_color=MUTED, font=ctk.CTkFont(size=11)
+                     ).grid(row=1, column=0, sticky="w", padx=2)
         self.theme_var = tk.StringVar(value=PALETTES[THEME]["label"])
         ctk.CTkSegmentedButton(head, values=[v["label"] for v in PALETTES.values()], variable=self.theme_var,
                                width=96, height=26, corner_radius=8, selected_color=ACCENT,
                                selected_hover_color=ACCENT_HOVER, unselected_color=BTN, unselected_hover_color=BTN_HOVER,
                                text_color=("gray10", "gray95"), font=ctk.CTkFont(size=11), command=self.on_theme
-                               ).grid(row=0, column=1, sticky="e")
+                               ).grid(row=0, column=2, sticky="e")
 
         # presets
         c0 = self.card(left, "預設組合", 1)
@@ -1538,11 +1544,7 @@ class App(_Base):
         self.apply_advanced()
         self.update_footer_controls()
 
-        # actions (pinned at the bottom)
-        self.run_btn = ctk.CTkButton(bottom, text="處理勾選的照片", height=46, corner_radius=14,
-                                     font=ctk.CTkFont(size=16, weight="bold"),
-                                     fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.process_selected)
-        self.run_btn.grid(row=0, column=0, sticky="ew", padx=16, pady=(8, 6))
+        # progress and status (pinned at the bottom; the big run button lives next to the thumbnails)
         self.progress = ctk.CTkProgressBar(bottom, height=6, progress_color=ACCENT)
         self.progress.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 4))
         self.progress.grid_remove()
@@ -1657,7 +1659,7 @@ class App(_Base):
         right.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=16)
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=6)
-        right.rowconfigure(2, weight=0, minsize=178)
+        right.rowconfigure(2, weight=0, minsize=214)
 
         pv = ctk.CTkFrame(right, corner_radius=16, fg_color=PV_BG)
         pv.grid(row=0, column=0, sticky="nsew")
@@ -1723,13 +1725,17 @@ class App(_Base):
         head.columnconfigure(0, weight=1)
         self.count_lbl = ctk.CTkLabel(head, text="尚未加入來源", anchor="w", font=ctk.CTkFont(size=14, weight="bold"))
         self.count_lbl.grid(row=0, column=0, sticky="w")
-        for i, (label, cmd) in enumerate((("全選", lambda: self.set_all(True)), ("全不選", lambda: self.set_all(False)),
-                                          ("重新整理", self.reload))):
-            ctk.CTkButton(head, text=label, width=64, height=26, corner_radius=13, fg_color=BTN,
-                          hover_color=BTN_HOVER, text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12),
-                          command=cmd).grid(row=0, column=1 + i, padx=(6, 0))
+        small = dict(height=26, corner_radius=13, fg_color=BTN, hover_color=BTN_HOVER,
+                     text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12))
+        self.sel_btn = ctk.CTkButton(head, text="全選", width=78, command=self.toggle_all, **small)   # 全選 <-> 取消全選
+        self.sel_btn.grid(row=0, column=1, padx=(6, 0))
+        ctk.CTkButton(head, text="重設", width=64, command=self.reload, **small).grid(row=0, column=2, padx=(6, 0))
+        self.run_btn = ctk.CTkButton(head, text=self.run_label(), width=150, height=36, corner_radius=18,
+                                     font=ctk.CTkFont(size=15, weight="bold"), fg_color=ACCENT,
+                                     hover_color=ACCENT_HOVER, text_color="white", command=self.process_selected)
+        self.run_btn.grid(row=0, column=3, padx=(14, 0))
 
-        self.strip = SmoothScrollFrame(right, orientation="horizontal", corner_radius=14, fg_color=CARD, height=140,
+        self.strip = SmoothScrollFrame(right, orientation="horizontal", corner_radius=14, fg_color=CARD, height=176,
                                        **SCROLLBAR)
         self.strip.grid(row=2, column=0, sticky="nsew")
         if HAVE_DND:
@@ -1977,6 +1983,18 @@ class App(_Base):
             self.theme_var.set(PALETTES[THEME]["label"])
             return
         os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def title_icon(self):
+        """The app icon, small, for the header (None when the file is missing: the title is shown without it)."""
+        try:
+            img = Image.open(ICON_FILE).convert("RGBA")
+            box = img.getchannel("A").getbbox()          # the icon has a transparent margin: crop it for a small size
+            if box:
+                img = img.crop(box)
+            self._title_icon = ctk.CTkImage(light_image=img, dark_image=img, size=(46, 46))
+            return self._title_icon
+        except (OSError, ValueError):
+            return None
 
     def set_app_icon(self):
         """Window / Dock icon from assets/icon_1024.png (optional: the app runs fine without it)."""
@@ -2485,7 +2503,7 @@ class App(_Base):
         name = p.name
         if p in self.imported:                      # "＋" marks photos that were imported (not from the folder)
             name = "＋" + name
-        name = name if len(name) <= 13 else name[:12] + "…"
+        name = name if len(name) <= 19 else name[:18] + "…"
         tile = PhotoTile(self.strip, name, var, cached[1] if cached else self.placeholder_thumb,
                          on_select=lambda path=p: self.select_photo(path),
                          on_menu=lambda e, path=p: self.tile_menu(e, path), on_check=self.update_count)
@@ -2528,7 +2546,18 @@ class App(_Base):
             if cur in (None, "待處理", "已有輸出"):
                 self.set_state(p, self.initial_state(p))
 
+    def run_label(self):
+        """Text of the main button: how many ticked photos it will process."""
+        try:
+            n = sum(1 for p in self.photos if self.checked[p].get())
+        except (AttributeError, KeyError, tk.TclError):
+            n = 0
+        return "匯出 %d 張" % n if n else "匯出勾選的照片"
+
     def update_count(self):
+        if self.batch is None or not self.batch.is_alive():
+            self.run_btn.configure(text=self.run_label())
+        self.sel_btn.configure(text="取消全選" if self.all_ticked() else "全選")
         n = len(self.photos)
         name = self.source_label(self.active_source)
         if n == 0:
@@ -2550,6 +2579,13 @@ class App(_Base):
         for p in self.photos:
             self.checked[p].set(value)
         self.update_count()
+
+    def all_ticked(self):
+        return bool(self.photos) and all(self.checked[p].get() for p in self.photos)
+
+    def toggle_all(self):
+        """One button for both: ticks everything, or (when everything is ticked) clears the ticks."""
+        self.set_all(not self.all_ticked())
 
     def select_photo(self, p):
         """Show `p` in the preview. Returns False when the file cannot be read."""
@@ -3292,7 +3328,7 @@ class App(_Base):
         names = {p: self.out_name(p) for p in paths}
         self.batch = threading.Thread(target=self.batch_worker, args=(paths, out, opts, names), daemon=True)
         self.batch.start()
-        self.run_btn.configure(text="停止處理", fg_color=RED, hover_color=RED_HOVER)
+        self.run_btn.configure(text="停止匯出", fg_color=RED, hover_color=RED_HOVER)
         self.progress.set(0)
         self.progress.grid()
         self.set_status("處理中 0 / %d" % len(paths), ACCENT)
@@ -3309,7 +3345,7 @@ class App(_Base):
 
     def on_batch_done(self, done, skip, fail, stopped):
         self.scan_sources()
-        self.run_btn.configure(text="處理勾選的照片", fg_color=ACCENT, hover_color=ACCENT_HOVER)
+        self.run_btn.configure(text=self.run_label(), fg_color=ACCENT, hover_color=ACCENT_HOVER)
         self.progress.grid_remove()
         text = "%s：完成 %d 張" % ("已停止" if stopped else "處理結束", done)
         if skip:
