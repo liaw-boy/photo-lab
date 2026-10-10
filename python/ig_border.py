@@ -50,7 +50,7 @@ STYLES = ["white", "rounded", "blur"]
 CORNER = 0.012        # corner radius as a fraction of the photo's long edge (rounded / blur)
 
 # ---- footer (camera info) ----
-LOGO_DIR = Path(__file__).resolve().parent / "logos"
+LOGO_DIR = Path(__file__).resolve().parent.parent / "logos"
 FOOTER_LAYOUTS = ["classic3", "center1", "center2", "split", "logo", "custom"]
 FOOTER_FIELDS = ["camera", "lens", "exposure", "date"]
 LOGO_POSITIONS = ["left", "right", "center"]     # classic3: left of the name block / just before the right block / centre
@@ -66,7 +66,7 @@ MAX_LOGO_WIDTH = 4096                       # rendered logo width cap, whatever 
 EXPOSURE_KEYS = ["focal", "aperture", "shutter", "iso"]
 DEFAULT_EXPOSURE_ITEMS = ["aperture", "shutter", "iso"]     # the default look shows just these three (no focal length)
 EXPOSURE_ORDERS = ["std", "iso_first"]      # focal aperture shutter iso  /  iso aperture shutter focal
-FONTS_DIR = Path(__file__).resolve().parent / "fonts"      # user-supplied .ttf/.otf/.ttc
+FONTS_DIR = Path(__file__).resolve().parent.parent / "fonts"      # user-supplied .ttf/.otf/.ttc
 MAX_FONT_BYTES = 40 * 1024 * 1024
 SYS = "/System/Library/Fonts/"
 SUP = "/System/Library/Fonts/Supplemental/"
@@ -639,10 +639,11 @@ def render_footer(footer, base_band, theme=THEME_DARK_TEXT):
     exp = T(exp_txt, fs, normal) if "exposure" in fields and exp_txt else None
     date = T(date_txt, fs, normal) if "date" in fields and date_txt else None
     cam_row = _row([logo, cam], round(gap * 0.5), False)
+    cdiv = bool(footer.get("center_divider", True))      # the "|" between the items of the centred layouts
     if layout == "center1":
-        parts = [_row([cam_row, lens, exp, date, custom_img], gap, True, weak)]
+        parts = [_row([cam_row, lens, exp, date, custom_img], gap, cdiv, weak)]
     elif layout == "center2":
-        parts = [_stack([_row([cam_row, lens], gap, True, weak), _row([exp, date, custom_img], gap, True, weak)],
+        parts = [_stack([_row([cam_row, lens], gap, cdiv, weak), _row([exp, date, custom_img], gap, cdiv, weak)],
                         round(fs * 0.5), "center")]
     else:  # split
         parts = [_stack([cam_row, lens], round(fs * 0.5), "left"),
@@ -685,10 +686,11 @@ def layout_to_style(layout, o=None):
                    line((["date"] if date else []) + ["custom"], False, 95, "weak"))
     empty = block("center", [])
     if layout in ("center1", "center2"):
+        csep = "divider" if o.get("center_divider", True) else "gap"
         row1 = line((["logo"] if cam else []) + (["model_auto"] if cam else []) + (["lens"] if lens else []), True,
-                    sep="divider")
+                    sep=csep)
         row2 = line((["exposure"] if expo else []) + (["date"] if date else []) + ["custom"], False, 100, "normal",
-                    "divider")
+                    csep)
         return {"left": block("left", []), "center": block("center", lines(row1, row2)), "right": block("right", []),
                 "divider": False}
     if layout == "logo":
@@ -800,6 +802,7 @@ def make_footer(img, opts, info=None):
     dfmt = getattr(opts, "footer_date_format", "ymd_dot")
     return {"info": info, "layout": layout if layout in FOOTER_LAYOUTS else "classic3", "fields": fields,
             "divider": bool(getattr(opts, "footer_divider", False)),
+            "center_divider": bool(getattr(opts, "footer_center_divider", True)),
             "text_scale": _clamp(getattr(opts, "footer_text_scale", 1.0), 0.5, 2.0, 1.0),
             "logo_scale": _clamp(getattr(opts, "footer_logo_scale", 1.0), 0.4, 2.5, 1.0),
             "height_scale": _clamp(getattr(opts, "footer_height_scale", 1.0), 0.6, 2.5, 1.0),
@@ -845,6 +848,11 @@ def _blur_background(img, cw, ch):
     small = small.crop((l, t, l + sw, t + sh)).filter(ImageFilter.GaussianBlur(max(sw, sh) * 0.045))
     bg = small.resize((cw, ch), Image.BICUBIC)
     return Image.blend(bg, Image.new("RGB", (cw, ch), (0, 0, 0)), 0.28)
+
+
+_ORIENT_OPS = {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180, 4: Image.Transpose.FLIP_TOP_BOTTOM,
+               5: Image.Transpose.TRANSPOSE, 6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE,
+               8: Image.Transpose.ROTATE_90}
 
 
 def _to_rgb(img):
@@ -903,7 +911,15 @@ def cleanup_temp(out_dir, older_than=60):
 
 def build_canvas(img, ratio, thickness, max_edge, footer=None, style="white"):
     """Return a new RGB image: `img` on a canvas (white / rounded / blurred), optionally with a camera-info footer."""
-    img = _to_rgb(ImageOps.exif_transpose(img))
+    if img.mode == "RGB" and max_edge and max(img.size) > max_edge:
+        # shrink first: transposing a full-size copy of a big photo is the memory peak
+        orient = img.getexif().get(0x0112)
+        s = max_edge / max(img.size)
+        img = img.resize((max(1, round(img.width * s)), max(1, round(img.height * s))), Image.LANCZOS)
+        if orient in _ORIENT_OPS:
+            img = img.transpose(_ORIENT_OPS[orient])
+    else:
+        img = _to_rgb(ImageOps.exif_transpose(img))
 
     w, h = img.size
     if max_edge and max(w, h) > max_edge:  # shrink only
@@ -1008,14 +1024,19 @@ def process(src, out_dir, opts, name=None):
     return dst
 
 
-def wait_until_stable(path, tries=20, interval=0.5):
-    """LR writes the file progressively; wait until its size stops changing."""
+def wait_until_stable(path, tries=20, interval=0.5, stop=None):
+    """LR writes the file progressively; wait until its size stops changing (a file untouched for 3 s is stable)."""
     last = -1
     for _ in range(tries):
+        if stop is not None and stop.is_set():
+            return False
         try:
-            size = path.stat().st_size
+            st = path.stat()
         except OSError:
             return False
+        size = st.st_size
+        if size > 0 and time.time() - st.st_mtime > 3:
+            return True
         if size == last and size > 0:
             return True
         last = size

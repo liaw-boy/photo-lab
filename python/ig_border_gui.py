@@ -49,7 +49,8 @@ DEFAULT_FONT_LABEL = ig_border.FONT_LABELS["auto"]
 MAX_PRESETS = 50
 MAX_RECENT = 5
 MAX_SOURCES = 30       # remembered source folders
-STYLES_DIR = Path(__file__).resolve().parent / "styles"
+STYLES_DIR = Path(__file__).resolve().parent.parent / "styles"
+ICON_FILE = Path(__file__).resolve().parent.parent / "assets" / "icon_1024.png"
 STYLE_EXT = ".igstyle.json"
 TOKEN_LABELS = {"": "（空）", "logo": "品牌 logo", "model": "機型", "model_auto": "機型（自動）", "brand_model": "品牌＋機型",
                 "brand": "品牌",
@@ -83,10 +84,26 @@ PRESET_PLACEHOLDER = "選擇預設…"
 # A built-in preset is a complete look: anything it does not mention goes back to these values, so applying it gives
 # the same result whatever the previous state was. (Your own text, colour pick, output size, custom style stay.)
 PRESET_BASE = {"ratio": "4:5", "thickness": 10, "style": "white", "footer": False, "layout": "classic3",
-               "fields": ["camera", "lens", "exposure", "date"], "divider": False, "text_scale": 100,
+               "fields": ["camera", "lens", "exposure", "date"], "divider": False, "center_divider": True,
+               "text_scale": 100,
                "logo_scale": 100, "height_scale": 100, "bold": True, "color_choice": "自動",
                "date_format": "ymd_dot", "logo_pos": "left", "main": "model", "mirror": False,
                "exposure_items": ["aperture", "shutter", "iso"], "exposure_order": "std", "font": "auto"}
+# One-click footer looks. Only the footer is touched (not ratio / border / font / colour / sizes), and every look
+# starts from FOOTER_BASE so applying it gives the same result whatever the previous state was.
+FOOTER_BASE = {"footer": True, "layout": "classic3", "fields": ["camera", "lens", "exposure", "date"],
+               "divider": False, "center_divider": True, "bold": True, "logo_pos": "left", "main": "model", "mirror": False,
+               "exposure_items": ["aperture", "shutter", "iso"], "exposure_order": "std"}
+FOOTER_LOOKS = {
+    "經典": {},
+    "簡約置中": {"layout": "center1", "fields": ["camera", "exposure"]},
+    "鏡頭主角": {"main": "lens", "logo_pos": "right", "divider": True},
+    "只放 logo": {"layout": "logo"},
+    "完整資訊": {"layout": "center2", "exposure_items": ["focal", "aperture", "shutter", "iso"]},
+}
+# What each layout actually uses, so the rest can be greyed out instead of explained in small print.
+CLASSIC_ONLY = ("divider", "main", "mirror", "logo_pos")
+FIELDS_LAYOUTS = ("classic3", "center1", "center2", "split")
 SIZE_LABELS = {"2048": 2048, "1350": 1350, "原尺寸": 0}
 DEFAULT_SIZE = "2048"
 PREVIEW_SRC_EDGE = 1800  # preview works on a reduced copy; padding is proportional so it looks identical
@@ -94,21 +111,47 @@ MAX_SCALE = 4.0          # maximum zoom: 400% of the rendered canvas pixels
 ZOOM_MIN = 0.2           # minimum zoom, relative to "fit to window" (fit = 1.0)
 MAX_PHOTOS = 300         # the strip lists at most this many photos
 THUMB = (104, 78)
-THUMB_BG = (30, 32, 36)          # every thumbnail sits on a canvas of exactly THUMB size in this colour
 
-ACCENT = ("#3478f6", "#2f6fe0")
-ACCENT_HOVER = ("#2a66d9", "#3c7df0")
-CARD = ("#ffffff", "#25272b")
-BTN = ("#eceef2", "#33363c")
-BTN_HOVER = ("#dfe2e8", "#3d4047")
-MUTED = ("#6b7280", "#9aa0aa")
+# Two colour sets (light, dark): "darkroom" = warm black with a safelight-amber accent (default), "carbon" = neutral
+# charcoal with a blue accent. The accent is a deep amber so that white text on it stays readable. The choice is stored
+# in the settings file and read once at start-up.
+PALETTES = {
+    "darkroom": {"label": "暗房", "ACCENT": ("#C9660A", "#CC6A0A"), "ACCENT_HOVER": ("#B35A08", "#E07A14"),
+                 "CARD": ("#ffffff", "#1B1511"), "BTN": ("#eceef2", "#2A211B"), "BTN_HOVER": ("#dfe2e8", "#382C24"),
+                 "MUTED": ("#6b7280", "#9A8B7C"), "WINDOW_BG": ("#f2f3f6", "#0E0A08"),
+                 "PV_BG": ("#e3e6ec", "#070504"), "THUMB_BG": (27, 21, 17)},
+    "carbon": {"label": "炭灰", "ACCENT": ("#3478f6", "#3d80f2"), "ACCENT_HOVER": ("#2a66d9", "#5c95f5"),
+               "CARD": ("#ffffff", "#24262a"), "BTN": ("#eceef2", "#2f3238"), "BTN_HOVER": ("#dfe2e8", "#3a3d44"),
+               "MUTED": ("#6b7280", "#8d93a0"), "WINDOW_BG": ("#f2f3f6", "#1b1c1f"),
+               "PV_BG": ("#e3e6ec", "#141518"), "THUMB_BG": (30, 32, 36)},
+}
+DEFAULT_THEME = "darkroom"
+
+
+def _stored_theme():
+    """The palette name from the settings file (it is read before the window exists); anything odd -> default."""
+    try:
+        if CONFIG.stat().st_size <= 1_000_000:
+            name = json.loads(CONFIG.read_text()).get("theme")
+            if isinstance(name, str) and name in PALETTES:
+                return name
+    except (OSError, ValueError, AttributeError):
+        pass
+    return DEFAULT_THEME
+
+
+THEME = _stored_theme()
+ACCENT, ACCENT_HOVER = PALETTES[THEME]["ACCENT"], PALETTES[THEME]["ACCENT_HOVER"]
+CARD, BTN, BTN_HOVER = PALETTES[THEME]["CARD"], PALETTES[THEME]["BTN"], PALETTES[THEME]["BTN_HOVER"]
+MUTED, WINDOW_BG, PV_BG = PALETTES[THEME]["MUTED"], PALETTES[THEME]["WINDOW_BG"], PALETTES[THEME]["PV_BG"]
+THUMB_BG = PALETTES[THEME]["THUMB_BG"]       # every thumbnail sits on a canvas of exactly THUMB size in this colour
 GREEN = "#2fb350"
 AMBER = ("#c27c0e", "#e0a030")
 RED = "#e5484d"
 RED_HOVER = "#cf3a3f"
 # Status shown on a thumbnail while exporting. It is drawn INTO the thumbnail as a small translucent pill
 # (a widget laid over an image cannot have transparent rounded corners).
-STATE_TEXT = {"待處理": "", "已有輸出": "已有輸出", "處理中": "處理中", "完成": "完成", "略過": "略過", "失敗": "失敗"}
+STATE_TEXT = {"待處理": "", "已有輸出": "", "處理中": "處理中", "完成": "完成", "略過": "略過", "失敗": "失敗"}
 PILL_COLORS = {"完成": (96, 210, 128), "失敗": (255, 112, 112), "略過": (244, 180, 78), "處理中": (118, 172, 255),
                "已有輸出": (205, 210, 220)}
 
@@ -335,8 +378,9 @@ class StyleEditor(ctk.CTkToplevel):
         self.withdraw()  # stay hidden while the widgets are built, then show the finished window at once
         self.app = app
         self.title("樣式編輯器")
-        self.geometry("1180x760")
-        self.minsize(1120, 740)
+        self.configure(fg_color=WINDOW_BG)
+        self.geometry("1180x880")
+        self.minsize(1120, 860)
         self.transient(app)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.loading = False
@@ -358,7 +402,7 @@ class StyleEditor(ctk.CTkToplevel):
         self.tick()
 
     # ---- live preview of the footer (what the user is designing) ----
-    def place_over(self, app, w=1180, h=760):
+    def place_over(self, app, w=1180, h=880):
         place_over_app(self, app, w, h)
 
     def render_preview(self):
@@ -405,11 +449,17 @@ class StyleEditor(ctk.CTkToplevel):
                      ).grid(row=0, column=0, sticky="w", padx=20, pady=(16, 0))
         self.origin_lbl = ctk.CTkLabel(self, text="", text_color=ACCENT, font=ctk.CTkFont(size=12), anchor="w")
         self.origin_lbl.grid(row=1, column=0, sticky="w", padx=20, pady=(2, 0))
-        ctk.CTkLabel(self, text="左、中、右三個區塊，每個區塊最多兩行，每行最多放三個項目。「機型（自動）」：有 logo 時只顯示機型，"
-                                "沒有 logo 時會加上品牌名。修改會即時顯示在下方預覽和主視窗的預覽。",
+        ctk.CTkLabel(self, text="左、中、右三區塊，每塊最多兩行、每行三個項目。「機型（自動）」＝有 logo 只顯示機型，沒有就加品牌名。",
                      text_color=MUTED, font=ctk.CTkFont(size=12), wraplength=1040, justify="left", anchor="w"
-                     ).grid(row=2, column=0, sticky="w", padx=20, pady=(2, 8))
-        pvf = ctk.CTkFrame(self, corner_radius=14, fg_color=("#e3e6ec", "#1a1b1e"))
+                     ).grid(row=2, column=0, sticky="w", padx=20, pady=(2, 6))
+        start = ctk.CTkFrame(self, fg_color="transparent")        # templates: start from a look instead of a blank grid
+        start.grid(row=2, column=0, sticky="e", padx=20)
+        ctk.CTkLabel(start, text="從樣式開始：", text_color=MUTED, font=ctk.CTkFont(size=12)).grid(row=0, column=0)
+        for i, name in enumerate(FOOTER_LOOKS):
+            ctk.CTkButton(start, text=name, width=70, height=26, corner_radius=8, fg_color=BTN, hover_color=BTN_HOVER,
+                          text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12),
+                          command=lambda n=name: self.start_from(n)).grid(row=0, column=i + 1, padx=2)
+        pvf = ctk.CTkFrame(self, corner_radius=14, fg_color=PV_BG)
         pvf.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 10))
         pvf.columnconfigure(0, weight=1)
         ctk.CTkLabel(pvf, text="預覽（資訊列效果）", text_color=MUTED, font=ctk.CTkFont(size=11)
@@ -440,10 +490,14 @@ class StyleEditor(ctk.CTkToplevel):
             opts = ctk.CTkFrame(card, fg_color="transparent")
             opts.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
             logo_v, rule_v = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
-            ctk.CTkCheckBox(opts, text="logo 放在文字左邊", variable=logo_v, width=130, command=self.changed, **check
+            ctk.CTkCheckBox(opts, text="logo 在文字左側", variable=logo_v, width=120, command=self.changed, **check
                             ).grid(row=0, column=0, sticky="w")
-            ctk.CTkCheckBox(opts, text="logo 後畫線", variable=rule_v, width=96, command=self.changed, **check
+            ctk.CTkCheckBox(opts, text="logo 後加分隔線", variable=rule_v, width=110, command=self.changed, **check
                             ).grid(row=0, column=1, sticky="w", padx=(6, 0))
+            if name == "right":
+                ctk.CTkCheckBox(opts, text="整個區塊前加一條分隔線", variable=self.divider_var, width=200,
+                                command=self.changed, **check).grid(row=1, column=0, columnspan=2, sticky="w",
+                                                                    pady=(6, 0))
             lines = []
             for i in range(ig_border.MAX_STYLE_LINES):
                 box = ctk.CTkFrame(card, corner_radius=10, fg_color=BTN)
@@ -451,6 +505,7 @@ class StyleEditor(ctk.CTkToplevel):
                 box.columnconfigure(0, weight=1)
                 ctk.CTkLabel(box, text="第 %d 行" % (i + 1), text_color=MUTED, font=ctk.CTkFont(size=11)
                              ).grid(row=0, column=0, sticky="w", padx=10, pady=(6, 0))
+                box.grid_remove() if i > 0 else None
                 items = []
                 irow = ctk.CTkFrame(box, fg_color="transparent")
                 irow.grid(row=1, column=0, sticky="ew", padx=6, pady=(2, 4))
@@ -466,23 +521,25 @@ class StyleEditor(ctk.CTkToplevel):
                 ctk.CTkCheckBox(orow, text="粗體", variable=bold, width=58, command=self.changed, **check
                                 ).grid(row=0, column=0, padx=(4, 4))
                 size = tk.StringVar(value="中")
-                ctk.CTkOptionMenu(orow, values=list(LINE_SIZE_LABELS), variable=size, width=58, **menu
-                                  ).grid(row=0, column=1, padx=2)
+                cap = dict(text_color=MUTED, font=ctk.CTkFont(size=11))
+                ctk.CTkLabel(orow, text="字級", **cap).grid(row=0, column=1, padx=(4, 0))
+                ctk.CTkOptionMenu(orow, values=list(LINE_SIZE_LABELS), variable=size, width=62, **menu
+                                  ).grid(row=0, column=2, padx=2)
                 tone = tk.StringVar(value="主要（深）")
                 sep = tk.BooleanVar(value=False)
-                line = {"items": items, "bold": bold, "size": size, "tone": tone, "sep": sep, "hex": None}
-                ctk.CTkOptionMenu(orow, values=list(TONE_LABELS), variable=tone, width=90,
-                                  command=lambda v, ln=line: self.on_tone(ln, v), **menu).grid(row=0, column=2, padx=2)
-                ctk.CTkCheckBox(orow, text="項目間畫線", variable=sep, width=80, command=self.changed, **check
-                                ).grid(row=0, column=3, padx=(4, 0))
+                line = {"items": items, "bold": bold, "size": size, "tone": tone, "sep": sep, "hex": None,
+                        "box": box, "orow": orow}
+                ctk.CTkLabel(orow, text="顏色", **cap).grid(row=0, column=3, padx=(6, 0))
+                ctk.CTkOptionMenu(orow, values=list(TONE_LABELS), variable=tone, width=92,
+                                  command=lambda v, ln=line: self.on_tone(ln, v), **menu).grid(row=0, column=4, padx=2)
+                ctk.CTkCheckBox(orow, text="項目之間加線", variable=sep, width=100, command=self.changed, **check
+                                ).grid(row=1, column=0, columnspan=5, sticky="w", padx=(4, 0), pady=(6, 0))
                 size.trace_add("write", lambda *a: self.changed())
                 lines.append(line)
             self.blocks[name] = {"align": align, "logo": logo_v, "rule": rule_v, "lines": lines}
+        self.refresh_lines()
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=5, column=0, sticky="ew", padx=20, pady=(8, 16))
-        ctk.CTkCheckBox(bar, text="在右側區塊前畫一條分隔線", variable=self.divider_var, checkbox_width=18,
-                        checkbox_height=18, fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.changed
-                        ).grid(row=0, column=0, sticky="w")
         bar.columnconfigure(1, weight=1)
         small = dict(height=34, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"))
         ctk.CTkButton(bar, text="重設為預設", width=96, command=self.reset, **small).grid(row=0, column=2, padx=4)
@@ -542,7 +599,39 @@ class StyleEditor(ctk.CTkToplevel):
                         ln["hex"] = col
         finally:
             self.loading = False
+        self.refresh_lines()
         self.set_origin()
+
+    def refresh_lines(self):
+        """A line's settings only matter once it has items; line 2 only shows up after line 1 is used."""
+        for blk in self.blocks.values():
+            prev_used = True
+            for i, ln in enumerate(blk["lines"]):
+                used = any(v.get() != TOKEN_LABELS[""] for v in ln["items"])
+                if i == 0 or prev_used or used:
+                    ln["box"].grid()
+                else:
+                    ln["box"].grid_remove()
+                if used:
+                    ln["orow"].grid()
+                else:
+                    ln["orow"].grid_remove()
+                prev_used = used
+
+    def start_from(self, name):
+        look = FOOTER_LOOKS.get(name)
+        if look is None:
+            return
+        o = {**FOOTER_BASE, **look}
+        style = ig_border.layout_to_style(o["layout"], {k: o[k] for k in ("fields", "divider", "main", "mirror",
+                                                                          "logo_pos")})
+        self.app.editor_busy = True
+        try:
+            self.app.apply_settings({k: o[k] for k in ("exposure_items", "exposure_order", "bold")})
+        finally:
+            self.app.editor_busy = False
+        self.load(style)
+        self.push()
 
     def set_origin(self):
         layout = LAYOUT_LABELS.get(self.app.layout_var.get(), "classic3")
@@ -556,6 +645,7 @@ class StyleEditor(ctk.CTkToplevel):
     def changed(self, *_):
         if self.loading:
             return
+        self.refresh_lines()
         if self.job:
             self.after_cancel(self.job)
         self.job = self.after(40, self.push)
@@ -567,6 +657,7 @@ class StyleEditor(ctk.CTkToplevel):
         try:
             app.style_slots = self.current_style()
             app.layout_var.set("自訂樣式")
+            app.update_footer_controls()
             app.footer_on.set(True)
             app.schedule_preview(interactive=True)
         finally:
@@ -587,6 +678,7 @@ class StyleEditor(ctk.CTkToplevel):
     def reset(self):
         self.app.style_slots = ig_border.default_style()
         self.app.layout_var.set("自訂樣式")
+        self.app.update_footer_controls()
         self.load(self.app.style_slots)
         self.app.schedule_preview()
         self.render_preview()
@@ -627,6 +719,7 @@ class StyleEditor(ctk.CTkToplevel):
             self.app.apply_settings(settings)
             self.app.style_slots = style
             self.app.layout_var.set("自訂樣式")
+            self.app.update_footer_controls()
             self.app.footer_on.set(True)
             self.load(style)
             self.app.schedule_preview()
@@ -673,6 +766,8 @@ class PhotoTile(tk.Canvas):
         self.on_select, self.on_check = on_select, on_check
         self.box_xy = (self.PAD + 2, self.H - self.PAD - 18)
         self.font = ctk.CTkFont(size=11)
+        self.pill_font = ctk.CTkFont(size=11, weight="bold")
+        self.state = ""
         self.draw()
         self.bind("<Button-1>", self.click)
         for seq in ("<Button-2>", "<Button-3>", "<Control-Button-1>"):
@@ -710,6 +805,8 @@ class PhotoTile(tk.Canvas):
         self.create_text(x + self.BOX + 6, y + self.BOX // 2, text=self.name, anchor="w", font=self.font,
                          fill=resolve_color(MUTED), tags="name")
         self.draw_check()
+        if self.state:
+            self.set_state(self.state)
 
     def draw_check(self):
         self.delete("check")
@@ -730,6 +827,39 @@ class PhotoTile(tk.Canvas):
     def set_photo(self, photo):
         self.photo = photo
         self.itemconfigure("photo", image=photo)
+
+    def set_state(self, state):
+        """Status pill drawn with canvas items, not baked into the bitmap: canvas text is rendered at the screen's
+        native resolution (a bitmap is scaled up on Retina displays, which made the label blurry)."""
+        self.state = state
+        self.delete("pill")
+        text = STATE_TEXT.get(state, "")
+        rgb = PILL_COLORS.get(state)
+        if not text or rgb is None:
+            return
+        col = "#%02x%02x%02x" % rgb
+        f = self.pill_font
+        tw = f.measure(text)
+        H, PADX, ICON, GAP = 20, 8, 10, 5
+        W = PADX * 2 + ICON + GAP + tw
+        x0, y1 = self.PAD + 7, self.PAD + THUMB[1] - 7
+        y0 = y1 - H
+        self.create_polygon(round_rect_points(x0, y0, x0 + W, y1, H // 2), smooth=True, fill="#14161a",
+                            outline="", tags="pill")
+        ix, iy, sz = x0 + PADX, y0 + (H - ICON) / 2, ICON
+        kw = dict(fill=col, width=2, tags="pill", capstyle="round", joinstyle="round")
+        if state == "完成":
+            self.create_line(ix + 1, iy + 5.5, ix + 4, iy + 8.5, ix + 9.2, iy + 1.8, **kw)
+        elif state == "失敗":
+            self.create_line(ix + 1.5, iy + 1.5, ix + 8.5, iy + 8.5, **kw)
+            self.create_line(ix + 8.5, iy + 1.5, ix + 1.5, iy + 8.5, **kw)
+        elif state == "略過":
+            self.create_line(ix + 1.2, iy + 5, ix + 8.8, iy + 5, **kw)
+        elif state == "處理中":
+            for k in range(3):
+                cx = ix + 1.6 + 3.4 * k
+                self.create_oval(cx - 1.2, iy + 3.8, cx + 1.2, iy + 6.2, fill=col, outline="", tags="pill")
+        self.create_text(x0 + PADX + ICON + GAP, (y0 + y1) / 2, text=text, anchor="w", font=f, fill=col, tags="pill")
 
     def click(self, event):
         x, y = self.box_xy
@@ -837,6 +967,7 @@ class SourceManager(ctk.CTkToplevel):
         self.withdraw()                      # stay hidden while the rows are built, then show the finished window
         self.app = app
         self.title("來源管理")
+        self.configure(fg_color=WINDOW_BG)
         self.minsize(780, 520)
         self.transient(app)
         self.protocol("WM_DELETE_WINDOW", self.close)
@@ -848,7 +979,7 @@ class SourceManager(ctk.CTkToplevel):
         ctk.CTkLabel(self, text="來源管理", font=ctk.CTkFont(size=20, weight="bold")
                      ).grid(row=0, column=0, sticky="w", padx=20, pady=(16, 0))
         ctk.CTkLabel(self, text="來源只是「記住照片放在哪裡」，不會複製、移動或刪除任何檔案。"
-                                "外接硬碟沒接上時，來源會留在清單裡並標示「找不到」，接上後就恢復。要加入新的來源請用主視窗的「選擇」。",
+                                "外接硬碟沒接上時，來源會留在清單裡並標示「找不到」，接上後就恢復。用下方按鈕新增或移除來源。",
                      text_color=MUTED, anchor="w", justify="left", wraplength=740
                      ).grid(row=1, column=0, sticky="w", padx=20, pady=(2, 8))
         self.body = SmoothScrollFrame(self, corner_radius=14, fg_color=CARD, **SCROLLBAR)
@@ -856,18 +987,28 @@ class SourceManager(ctk.CTkToplevel):
         self.body.columnconfigure(0, weight=1)
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=3, column=0, sticky="ew", padx=20, pady=(10, 16))
-        bar.columnconfigure(1, weight=1)
+        bar.columnconfigure(2, weight=1)
         btn = dict(height=34, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"))
-        ctk.CTkButton(bar, text="移除勾選的", width=92, command=self.remove_picked, **btn).grid(row=0, column=0)
+        ctk.CTkButton(bar, text="＋ 加入資料夾…", width=116, command=self.add_folder, **btn).grid(row=0, column=0)
+        ctk.CTkButton(bar, text="＋ 匯入照片…", width=104, command=self.import_photos, **btn
+                      ).grid(row=0, column=1, padx=(6, 0))
+        ctk.CTkButton(bar, text="－ 移除勾選的", width=104, command=self.remove_picked, **btn
+                      ).grid(row=0, column=3, padx=(0, 6))
         self.clean_btn = ctk.CTkButton(bar, text="清除失效項目", width=116, command=self.clear_missing, **btn)
-        self.clean_btn.grid(row=0, column=2, padx=(0, 6))
+        self.clean_btn.grid(row=0, column=4, padx=(0, 6))
         ctk.CTkButton(bar, text="完成", width=80, height=34, corner_radius=10, fg_color=ACCENT,
-                      hover_color=ACCENT_HOVER, command=self.close).grid(row=0, column=3)
+                      hover_color=ACCENT_HOVER, command=self.close).grid(row=0, column=5)
         self.build_rows()
         self.update_idletasks()
         place_over_app(self, app, 820, 560)
         self.deiconify()
         self.lift()
+
+    def add_folder(self):
+        self.app.pick_folder()               # adds the folder, refreshes the main window and this list
+
+    def import_photos(self):
+        self.app.import_dialog()
 
     def close(self):
         self.app.source_manager = None
@@ -891,7 +1032,7 @@ class SourceManager(ctk.CTkToplevel):
         if app.imported:
             self.add_imported_row(len(app.sources))
         if not keys:
-            ctk.CTkLabel(self.body, text="還沒有來源。用下方的按鈕加入資料夾或匯入照片。", text_color=MUTED
+            ctk.CTkLabel(self.body, text="還沒有來源。用下方的「加入資料夾」或「匯入照片」新增。", text_color=MUTED
                          ).grid(row=0, column=0, padx=24, pady=40)
         self.update_counts()
 
@@ -942,6 +1083,8 @@ class App(_Base):
             except Exception:
                 globals()["HAVE_DND"] = False
         self.title("Photo_Lab")
+        self.configure(fg_color=WINDOW_BG)
+        self.set_app_icon()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         w, h = min(1480, max(1000, sw - 80)), min(1040, max(740, sh - 120))
         self.geometry("%dx%d+%d+%d" % (w, h, max(0, (sw - w) // 2), max(0, (sh - h) // 3)))
@@ -950,6 +1093,8 @@ class App(_Base):
         self.msg_q = queue.Queue()
         self.thumb_q = queue.Queue()
         self.batch_stop = threading.Event()
+        self.batch_fail_reason = None
+        self.save_job = None
         self.batch = None
 
         # preview state
@@ -1006,6 +1151,7 @@ class App(_Base):
         self.layout_var = tk.StringVar(value=self.choice(cfg.get("footer_layout"), LAYOUT_LABELS, "經典三欄"))
         self.style_var = tk.StringVar(value=self.choice(cfg.get("style"), STYLE_LABELS, "白底"))
         self.divider_var = tk.BooleanVar(value=cfg.get("footer_divider") is True)
+        self.cdivider_var = tk.BooleanVar(value=cfg.get("footer_center_divider") is not False)   # centred layouts: "|"
         self.overwrite_var = tk.BooleanVar(value=cfg.get("overwrite") is True)
         self.text_scale = tk.DoubleVar(value=self.num(cfg.get("text_scale"), 50, 200, 100))
         self.logo_scale = tk.DoubleVar(value=self.num(cfg.get("logo_scale"), 40, 250, 100))
@@ -1019,6 +1165,7 @@ class App(_Base):
         self.custom_text_var = tk.StringVar(value=self.clean_text(cfg.get("custom_text", "")))
         self.main_var = tk.BooleanVar(value=cfg.get("lens_main") is True)
         self.mirror_var = tk.BooleanVar(value=cfg.get("mirror") is True)
+        self.adv_open = cfg.get("advanced_open") is True
         items = cfg.get("exposure_items")
         items = [k for k in items if isinstance(k, str)] if isinstance(items, list) else list(ig_border.DEFAULT_EXPOSURE_ITEMS)
         if sorted(items) == sorted(k for _, k in EXPO_LABELS):   # the old default (all four) was never a deliberate choice
@@ -1085,7 +1232,8 @@ class App(_Base):
         fo = self.footer_opts()
         return ig_border.layout_to_style(layout, {
             "fields": fo["footer_fields"], "mirror": fo["footer_mirror"], "main": fo["footer_main"],
-            "logo_pos": fo["footer_logo_pos"], "divider": fo["footer_divider"]})
+            "logo_pos": fo["footer_logo_pos"], "divider": fo["footer_divider"],
+            "center_divider": fo["footer_center_divider"]})
 
     def sync_editor(self):
         """The main window changed (layout, preset, tick boxes ...): show that style's parameters in the editor."""
@@ -1197,8 +1345,17 @@ class App(_Base):
         bottom.grid(row=1, column=0, sticky="ew")
         bottom.columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(left, text="Photo_Lab", font=ctk.CTkFont(size=24, weight="bold")
-                     ).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 10))
+        head = ctk.CTkFrame(left, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=20, pady=(14, 10))
+        head.columnconfigure(0, weight=1)
+        ctk.CTkLabel(head, text="Photo_Lab", font=ctk.CTkFont(size=24, weight="bold")
+                     ).grid(row=0, column=0, sticky="w")
+        self.theme_var = tk.StringVar(value=PALETTES[THEME]["label"])
+        ctk.CTkSegmentedButton(head, values=[v["label"] for v in PALETTES.values()], variable=self.theme_var,
+                               width=96, height=26, corner_radius=8, selected_color=ACCENT,
+                               selected_hover_color=ACCENT_HOVER, unselected_color=BTN, unselected_hover_color=BTN_HOVER,
+                               text_color=("gray10", "gray95"), font=ctk.CTkFont(size=11), command=self.on_theme
+                               ).grid(row=0, column=1, sticky="e")
 
         # presets
         c0 = self.card(left, "預設組合", 1)
@@ -1260,33 +1417,56 @@ class App(_Base):
         self.on_thick()
 
         # camera info
+        menu = dict(height=30, corner_radius=10, fg_color=BTN, button_color=BTN_HOVER, button_hover_color=BTN_HOVER,
+                    text_color=("gray10", "gray95"), dropdown_text_color=("gray10", "gray95"))
         c4 = self.card(left, "相機資訊", 5)
         ctk.CTkSwitch(c4, text="在底部顯示相機參數", variable=self.footer_on, progress_color=ACCENT,
                       command=self.schedule_preview).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 10))
+        looks = ctk.CTkFrame(c4, fg_color="transparent")
+        looks.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
+        for i in range(3):
+            looks.columnconfigure(i, weight=1, uniform="looks")
+        for i, name in enumerate(FOOTER_LOOKS):
+            ctk.CTkButton(looks, text=name, height=30, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER,
+                          text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12),
+                          command=lambda n=name: self.apply_look(n)
+                          ).grid(row=i // 3, column=i % 3, sticky="ew", padx=2, pady=2)
         lrow = ctk.CTkFrame(c4, fg_color="transparent")
-        lrow.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
+        lrow.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 10))
         lrow.columnconfigure(0, weight=1)
         ctk.CTkOptionMenu(lrow, values=list(LAYOUT_LABELS), variable=self.layout_var, height=32, corner_radius=10,
                           fg_color=BTN, button_color=BTN_HOVER, button_hover_color=BTN_HOVER,
                           text_color=("gray10", "gray95"), dropdown_text_color=("gray10", "gray95"),
-                          command=lambda v: self.schedule_preview()).grid(row=0, column=0, sticky="ew")
+                          command=self.on_footer_change).grid(row=0, column=0, sticky="ew")
         ctk.CTkButton(lrow, text="編輯樣式…", width=88, height=32, corner_radius=10, fg_color=BTN,
                       hover_color=BTN_HOVER, text_color=("gray10", "gray95"), command=self.open_style_editor
                       ).grid(row=0, column=1, padx=(6, 0))
         fg = ctk.CTkFrame(c4, fg_color="transparent")
-        fg.grid(row=3, column=0, sticky="ew", padx=16)
+        fg.grid(row=4, column=0, sticky="ew", padx=16)
         cb = dict(checkbox_width=18, checkbox_height=18, fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                  font=ctk.CTkFont(size=12), command=self.schedule_preview)
-        order = ["camera", "lens", "date", "exposure"]
+                  font=ctk.CTkFont(size=12), command=self.on_footer_change)
         labels = {k: l for l, k in FIELD_LABELS}
-        for i, key in enumerate(order):
-            ctk.CTkCheckBox(fg, text=labels[key], variable=self.field_vars[key], width=80, **cb
-                            ).grid(row=i // 3, column=i % 3, sticky="w", pady=3)
-        ctk.CTkCheckBox(fg, text="分隔線(三欄)", variable=self.divider_var, width=100, **cb
-                        ).grid(row=1, column=1, columnspan=2, sticky="w", pady=3, padx=(20, 0))
-        ctk.CTkLabel(c4, text="logo：放進 logos/ 資料夾，檔名如 sony.png。選「自訂樣式」時內容由「編輯樣式」決定。",
+        self.field_cbs = {}
+        for i, key in enumerate(["camera", "lens", "date", "exposure"]):
+            self.field_cbs[key] = ctk.CTkCheckBox(fg, text=labels[key], variable=self.field_vars[key], width=80, **cb)
+            self.field_cbs[key].grid(row=i // 3, column=i % 3, sticky="w", pady=3)
+        eg = ctk.CTkFrame(c4, fg_color="transparent")          # which exposure values, right under 拍攝參數
+        eg.grid(row=5, column=0, sticky="w", padx=(40, 16), pady=(0, 2))
+        self.exp_cbs = {}
+        for i, (label, key) in enumerate(EXPO_LABELS):
+            self.exp_cbs[key] = ctk.CTkCheckBox(eg, text=label, variable=self.exp_vars[key], width=58,
+                                                checkbox_width=16, checkbox_height=16, fg_color=ACCENT,
+                                                hover_color=ACCENT_HOVER, font=ctk.CTkFont(size=12),
+                                                command=self.schedule_preview)
+            self.exp_cbs[key].grid(row=0, column=i, padx=(0, 4))
+        self.divider_cb = ctk.CTkCheckBox(c4, text="分隔線", variable=self.divider_var, width=100, **cb)   # relabelled per layout
+        self.divider_cb.grid(row=6, column=0, sticky="w", padx=16, pady=(4, 0))
+        self.footer_hint = ctk.CTkLabel(c4, text="", text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=290,
+                                        justify="left", anchor="w")
+        self.footer_hint.grid(row=7, column=0, sticky="w", padx=16, pady=(4, 0))
+        ctk.CTkLabel(c4, text="logo：放進 logos/ 資料夾，檔名如 sony.png。",
                      text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=290, justify="left", anchor="w"
-                     ).grid(row=4, column=0, sticky="w", padx=16, pady=(4, 12))
+                     ).grid(row=8, column=0, sticky="w", padx=16, pady=(4, 12))
 
         # output
         c3 = self.card(left, "輸出長邊 (px)", 4)
@@ -1302,58 +1482,61 @@ class App(_Base):
                      text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=290, justify="left", anchor="w"
                      ).grid(row=3, column=0, sticky="w", padx=16, pady=(0, 14))
 
-        # footer details
+        # footer details: the everyday controls stay visible, the rest folds away under 進階
         c6 = self.card(left, "資訊列細節", 6)
         self.slider_row(c6, 1, "文字大小", self.text_scale, 50, 200)
         self.slider_row(c6, 2, "logo 大小", self.logo_scale, 40, 250)
-        self.slider_row(c6, 3, "資訊列高度", self.height_scale, 60, 250)
-        menu = dict(height=30, corner_radius=10, fg_color=BTN, button_color=BTN_HOVER, button_hover_color=BTN_HOVER,
-                    text_color=("gray10", "gray95"), dropdown_text_color=("gray10", "gray95"))
 
-        def line(row, text, pady=(8, 0)):
-            f = ctk.CTkFrame(c6, fg_color="transparent")
+        def line(row, text, pady=(8, 0), parent=c6):
+            f = ctk.CTkFrame(parent, fg_color="transparent")
             f.grid(row=row, column=0, sticky="ew", padx=16, pady=pady)
             f.columnconfigure(1, weight=1)
             ctk.CTkLabel(f, text=text, width=64, anchor="w").grid(row=0, column=0)
             return f
 
-        fr = line(4, "字體", (4, 0))
+        r = line(3, "日期格式", (4, 0))
+        self.datefmt_menu = ctk.CTkOptionMenu(r, values=list(DATE_LABELS), variable=self.datefmt_var,
+                                              command=lambda v: self.schedule_preview(), **menu)
+        self.datefmt_menu.grid(row=0, column=1, sticky="ew")
+        self.adv_btn = ctk.CTkButton(c6, text="", height=28, corner_radius=10, fg_color="transparent",
+                                     hover_color=BTN, text_color=MUTED, anchor="w", command=self.toggle_advanced)
+        self.adv_btn.grid(row=4, column=0, sticky="ew", padx=10, pady=(6, 0))
+        adv = self.adv_frame = ctk.CTkFrame(c6, fg_color="transparent")
+        adv.columnconfigure(0, weight=1)
+        self.slider_row(adv, 0, "資訊列高度", self.height_scale, 60, 250)
+        fr = line(1, "字體", (4, 0), adv)
         self.font_menu = ctk.CTkOptionMenu(fr, values=list(self.font_labels), variable=self.font_var,
                                            command=lambda v: self.schedule_preview(), **menu)
         self.font_menu.grid(row=0, column=1, sticky="ew")
         ctk.CTkButton(fr, text="↻", width=30, height=30, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER,
                       text_color=("gray10", "gray95"), command=self.refresh_fonts).grid(row=0, column=2, padx=(6, 0))
-        cr = line(5, "文字顏色")
+        cr = line(2, "文字顏色", parent=adv)
         ctk.CTkOptionMenu(cr, values=COLOR_LABELS, variable=self.color_var, command=self.on_color, width=96, **menu
                           ).grid(row=0, column=1, sticky="w")
         ctk.CTkSwitch(cr, text="粗體", variable=self.bold_var, progress_color=ACCENT, width=60,
                       command=self.schedule_preview).grid(row=0, column=2, sticky="e")
-        for i, (text, var, values) in enumerate((("日期格式", self.datefmt_var, list(DATE_LABELS)),
-                                                 ("logo 位置", self.logopos_var, list(LOGO_POS_LABELS)))):
-            r = line(6 + i, text)
-            ctk.CTkOptionMenu(r, values=values, variable=var, command=lambda v: self.schedule_preview(), **menu
-                              ).grid(row=0, column=1, sticky="ew")
-        er = line(8, "曝光參數")
-        eg = ctk.CTkFrame(er, fg_color="transparent")
-        eg.grid(row=0, column=1, sticky="w")
-        for i, (label, key) in enumerate(EXPO_LABELS):
-            ctk.CTkCheckBox(eg, text=label, variable=self.exp_vars[key], width=58, checkbox_width=16, checkbox_height=16,
-                            fg_color=ACCENT, hover_color=ACCENT_HOVER, font=ctk.CTkFont(size=12),
-                            command=self.schedule_preview).grid(row=0, column=i, padx=(0, 4))
-        orow = line(9, "排列順序")
-        ctk.CTkOptionMenu(orow, values=list(EXPO_ORDER_LABELS), variable=self.exporder_var,
-                          command=lambda v: self.schedule_preview(), **menu).grid(row=0, column=1, sticky="ew")
-        sw = ctk.CTkFrame(c6, fg_color="transparent")
-        sw.grid(row=10, column=0, sticky="ew", padx=16, pady=(10, 0))
-        ctk.CTkSwitch(sw, text="鏡頭當主文字（粗體），機身放下面", variable=self.main_var, progress_color=ACCENT,
-                      command=self.schedule_preview).grid(row=0, column=0, sticky="w")
-        ctk.CTkSwitch(sw, text="左右對調（參數在左，logo 與機型在右）", variable=self.mirror_var, progress_color=ACCENT,
-                      command=self.schedule_preview).grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ctk.CTkLabel(c6, text="這兩項只在「經典三欄」版面有效。", text_color=MUTED, font=ctk.CTkFont(size=11),
-                     anchor="w").grid(row=11, column=0, sticky="w", padx=16, pady=(4, 0))
-        ct = line(12, "自訂文字", (10, 14))
+        r = line(3, "logo 位置", parent=adv)
+        self.logopos_menu = ctk.CTkOptionMenu(r, values=list(LOGO_POS_LABELS), variable=self.logopos_var,
+                                              command=lambda v: self.schedule_preview(), **menu)
+        self.logopos_menu.grid(row=0, column=1, sticky="ew")
+        orow = line(4, "排列順序", parent=adv)
+        self.exporder_menu = ctk.CTkOptionMenu(orow, values=list(EXPO_ORDER_LABELS), variable=self.exporder_var,
+                                               command=lambda v: self.schedule_preview(), **menu)
+        self.exporder_menu.grid(row=0, column=1, sticky="ew")
+        sw = ctk.CTkFrame(adv, fg_color="transparent")
+        sw.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 0))
+        self.main_sw = ctk.CTkSwitch(sw, text="鏡頭當主文字（粗體），機身放下面", variable=self.main_var,
+                                     progress_color=ACCENT, command=self.schedule_preview)
+        self.main_sw.grid(row=0, column=0, sticky="w")
+        self.mirror_sw = ctk.CTkSwitch(sw, text="左右對調（參數在左，logo 與機型在右）", variable=self.mirror_var,
+                                       progress_color=ACCENT, command=self.schedule_preview)
+        self.mirror_sw.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ct = line(6, "自訂文字", (10, 4), adv)
         ctk.CTkEntry(ct, textvariable=self.custom_text_var, height=30, corner_radius=10, border_width=0, fg_color=BTN,
                      placeholder_text="例如 @你的 IG 帳號（最多 60 字）").grid(row=0, column=1, sticky="ew")
+        ctk.CTkFrame(c6, height=10, fg_color="transparent").grid(row=6, column=0)
+        self.apply_advanced()
+        self.update_footer_controls()
 
         # actions (pinned at the bottom)
         self.run_btn = ctk.CTkButton(bottom, text="處理勾選的照片", height=46, corner_radius=14,
@@ -1476,7 +1659,7 @@ class App(_Base):
         right.rowconfigure(0, weight=6)
         right.rowconfigure(2, weight=0, minsize=178)
 
-        pv = ctk.CTkFrame(right, corner_radius=16, fg_color=("#e3e6ec", "#1a1b1e"))
+        pv = ctk.CTkFrame(right, corner_radius=16, fg_color=PV_BG)
         pv.grid(row=0, column=0, sticky="nsew")
         pv.columnconfigure(0, weight=1)
         pv.rowconfigure(0, weight=1)
@@ -1577,6 +1760,7 @@ class App(_Base):
                 "size": self.size_var.get(), "thickness": round(self.thick_var.get(), 1),
                 "footer": bool(self.footer_on.get()), "footer_layout": self.layout_var.get(),
                 "style": self.style_var.get(), "footer_divider": bool(self.divider_var.get()),
+                "footer_center_divider": bool(self.cdivider_var.get()),
                 "overwrite": bool(self.overwrite_var.get()),
                 "footer_fields": [k for k, v in self.field_vars.items() if v.get()],
                 "text_scale": round(self.text_scale.get()), "logo_scale": round(self.logo_scale.get()),
@@ -1586,6 +1770,7 @@ class App(_Base):
                 "logo_pos": LOGO_POS_LABELS.get(self.logopos_var.get(), "left"),
                 "custom_text": self.clean_text(self.custom_text_var.get()),
                 "lens_main": bool(self.main_var.get()), "mirror": bool(self.mirror_var.get()),
+                "advanced_open": bool(self.adv_open), "theme": THEME,
                 "exposure_items": [k for k, v in self.exp_vars.items() if v.get()],
                 "exposure_order": EXPO_ORDER_LABELS.get(self.exporder_var.get(), "std"),
                 "font": self.font_labels.get(self.font_var.get(), "auto"),
@@ -1744,6 +1929,7 @@ class App(_Base):
                 "footer_layout": LAYOUT_LABELS.get(self.layout_var.get(), "classic3"),
                 "footer_fields": [k for k, v in self.field_vars.items() if v.get()],
                 "footer_divider": bool(self.divider_var.get()),
+                "footer_center_divider": bool(self.cdivider_var.get()),
                 "footer_text_scale": self.text_scale.get() / 100, "footer_logo_scale": self.logo_scale.get() / 100,
                 "footer_height_scale": self.height_scale.get() / 100, "footer_color": self.color_hex(),
                 "footer_bold": bool(self.bold_var.get()),
@@ -1766,6 +1952,94 @@ class App(_Base):
             self.font_var.set(DEFAULT_FONT_LABEL)
         self.set_status("已重新掃描字體（%d 種）" % len(self.font_labels), GREEN)
         self.schedule_preview()
+
+    def on_theme(self, label):
+        """Colours are baked into the widgets when they are built, so a new palette means restarting the program."""
+        name = next((k for k, v in PALETTES.items() if v["label"] == label), THEME)
+        if name == THEME:
+            return
+        if self.batch and self.batch.is_alive():
+            messagebox.showinfo("處理中", "還有照片正在處理，請等處理完再切換配色。")
+            self.theme_var.set(PALETTES[THEME]["label"])
+            return
+        if not messagebox.askyesno("切換配色", "切換配色需要重新啟動程式（設定會保留）。現在重新啟動嗎？"):
+            self.theme_var.set(PALETTES[THEME]["label"])
+            return
+        self.save_cfg()
+        try:                                   # save_cfg wrote the old name; update only that key, atomically
+            data = json.loads(CONFIG.read_text())
+            data["theme"] = name
+            fd, tmp = tempfile.mkstemp(prefix=".ig_border_gui.", suffix=".tmp", dir=str(CONFIG.parent))
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp, CONFIG)
+        except (OSError, ValueError):
+            self.theme_var.set(PALETTES[THEME]["label"])
+            return
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def set_app_icon(self):
+        """Window / Dock icon from assets/icon_1024.png (optional: the app runs fine without it)."""
+        try:
+            img = Image.open(ICON_FILE).convert("RGBA").resize((256, 256), Image.LANCZOS)
+            self.app_icon = ImageTk.PhotoImage(img)           # keep a reference or Tk drops it
+            self.iconphoto(True, self.app_icon)
+        except (OSError, tk.TclError, ValueError):
+            pass
+
+    def toggle_advanced(self):
+        self.adv_open = not self.adv_open
+        self.apply_advanced()
+
+    def apply_advanced(self):
+        if self.adv_open:
+            self.adv_frame.grid(row=5, column=0, sticky="ew")
+        else:
+            self.adv_frame.grid_remove()
+        self.adv_btn.configure(text=("▾ 進階" if self.adv_open else "▸ 進階（字體、顏色、logo 位置…）"))
+
+    def on_footer_change(self, *_):
+        self.update_footer_controls()
+        self.schedule_preview()
+
+    def update_footer_controls(self):
+        """Grey out what the chosen layout does not use, and say why, instead of relying on small print."""
+        layout = LAYOUT_LABELS.get(self.layout_var.get(), "classic3")
+
+        def on(widget, flag):
+            widget.configure(state="normal" if flag else "disabled")
+
+        for cb in self.field_cbs.values():
+            on(cb, layout in FIELDS_LAYOUTS)
+        expo_ok = layout in ("classic3", "center1", "center2", "split", "custom")
+        for cb in self.exp_cbs.values():
+            on(cb, expo_ok and (layout == "custom" or self.field_vars["exposure"].get()))
+        on(self.exporder_menu, expo_ok)
+        on(self.datefmt_menu, layout != "logo")
+        classic = layout == "classic3"
+        centred = layout in ("center1", "center2")
+        if centred:                                  # same checkbox, bound to the setting the layout actually uses
+            self.divider_cb.configure(text="項目之間加分隔線", variable=self.cdivider_var)
+        else:
+            self.divider_cb.configure(text="分隔線（右側區塊前）", variable=self.divider_var)
+        on(self.divider_cb, classic or centred)
+        on(self.main_sw, classic)
+        on(self.mirror_sw, classic)
+        on(self.logopos_menu, classic)
+        if layout == "custom":
+            self.footer_hint.configure(text="自訂樣式：顯示項目由「編輯樣式」決定。")
+        elif layout == "logo":
+            self.footer_hint.configure(text="只放 logo：不顯示相機、鏡頭、日期與參數。")
+        elif not classic:
+            self.footer_hint.configure(text="鏡頭主文字、左右對調、logo 位置只在「經典三欄」有效。")
+        else:
+            self.footer_hint.configure(text="")
+
+    def apply_look(self, name):
+        look = FOOTER_LOOKS.get(name)
+        if look is not None:
+            self.apply_settings({**FOOTER_BASE, **look})
+            self.set_status("已套用樣式：%s" % name, GREEN)
 
     def slider_row(self, parent, row, text, var, lo, hi):
         f = ctk.CTkFrame(parent, fg_color="transparent")
@@ -2216,6 +2490,7 @@ class App(_Base):
                          on_select=lambda path=p: self.select_photo(path),
                          on_menu=lambda e, path=p: self.tile_menu(e, path), on_check=self.update_count)
         self.tiles[p] = {"tile": tile}
+        tile.set_state(self.states.get(p, "待處理"))
 
     def set_state(self, p, text):
         self.states[p] = text
@@ -2235,10 +2510,15 @@ class App(_Base):
                 self.badge_shown[p] = state
                 return                                # placeholder, no badge: the tile already shows it
             base = Image.new("RGB", THUMB, THUMB_BG)
-        im = status_pill(base, state)
-        ph = ImageTk.PhotoImage(im)
-        self.thumbs[p] = (self.thumb_base[p][0] if p in self.thumb_base else 0, ph)
+        mt = self.thumb_base[p][0] if p in self.thumb_base else 0
+        cached = self.thumbs.get(p)
+        if p in self.thumb_base and cached is not None and cached[0] == mt:
+            ph = cached[1]                                 # the plain thumbnail did not change: only the pill did
+        else:
+            ph = ImageTk.PhotoImage(base)
+            self.thumbs[p] = (mt, ph)
         t["tile"].set_photo(ph)
+        t["tile"].set_state(state)
         self.badge_shown[p] = state
 
     def refresh_states(self):
@@ -2341,6 +2621,9 @@ class App(_Base):
         """interactive=True (slider drags, typing): throttled draft frames from a small copy, then one sharp
         render when the input pauses. Otherwise a short debounce."""
         self.sync_editor()
+        if self.save_job:                      # settings follow changes after a pause, not only on close
+            self.after_cancel(self.save_job)
+        self.save_job = self.after(2000, self.save_cfg_later)
         if not interactive:
             if self.preview_job:
                 self.after_cancel(self.preview_job)
@@ -2352,6 +2635,10 @@ class App(_Base):
         if self.settle_job:
             self.after_cancel(self.settle_job)
         self.settle_job = self.after(180, self.settle_preview)
+
+    def save_cfg_later(self):
+        self.save_job = None
+        self.save_cfg()
 
     def settle_preview(self):
         self.settle_job = None
@@ -2489,7 +2776,7 @@ class App(_Base):
         try:
             return pv._apply_appearance_mode(pv.cget("fg_color"))      # follows light / dark mode
         except (tk.TclError, AttributeError):
-            return "#1a1b1e"
+            return PV_BG[1]
 
     def show_image(self, im):
         """Show a PIL image in the preview, reusing the PhotoImage when the size is unchanged (no allocations)."""
@@ -2673,7 +2960,8 @@ class App(_Base):
         return {"ratio": self.ratio, "thickness": round(self.thick_var.get()),
                 "style": STYLE_LABELS.get(self.style_var.get(), "white"), "size": self.size_var.get(),
                 "footer": fo["footer"], "layout": fo["footer_layout"], "fields": fo["footer_fields"],
-                "divider": fo["footer_divider"], "text_scale": round(self.text_scale.get()),
+                "divider": fo["footer_divider"], "center_divider": fo["footer_center_divider"],
+                "text_scale": round(self.text_scale.get()),
                 "logo_scale": round(self.logo_scale.get()), "height_scale": round(self.height_scale.get()),
                 "bold": fo["footer_bold"], "color_choice": self.color_var.get(), "custom_color": self.custom_color,
                 "date_format": fo["footer_date_format"], "logo_pos": fo["footer_logo_pos"],
@@ -2704,6 +2992,8 @@ class App(_Base):
                 v.set(k in d["fields"])
         if "divider" in d:
             self.divider_var.set(d["divider"] is True)
+        if "center_divider" in d:
+            self.cdivider_var.set(d["center_divider"] is not False)
         for key, var, lo, hi in (("text_scale", self.text_scale, 50, 200), ("logo_scale", self.logo_scale, 40, 250),
                                  ("height_scale", self.height_scale, 60, 250)):
             if key in d:
@@ -2736,6 +3026,7 @@ class App(_Base):
             if self.style_editor is not None and self.style_editor.winfo_exists():
                 self.style_editor.load(self.style_slots)
         self.on_thick()
+        self.update_footer_controls()
         self.schedule_preview()
 
     def apply_preset(self, name):
@@ -2965,10 +3256,12 @@ class App(_Base):
         """Process a single photo and report its state. Returns 'done' / 'skip' / 'fail'."""
         self.msg_q.put(("state", p, "處理中"))
         try:
-            if not ig_border.wait_until_stable(p, tries=40, interval=0.25):
+            if not ig_border.wait_until_stable(p, tries=40, interval=0.25, stop=self.batch_stop):
                 raise OSError("unstable")
             dst = ig_border.process(p, out, opts, name)
-        except Exception:
+        except Exception as e:
+            if self.batch_fail_reason is None:           # type name only: no paths or details leak
+                self.batch_fail_reason = "原因：%s" % type(e).__name__
             self.msg_q.put(("state", p, "失敗"))
             return "fail"
         self.msg_q.put(("state", p, "完成" if dst else "略過"))
@@ -3006,6 +3299,7 @@ class App(_Base):
 
     def batch_worker(self, paths, out, opts, names):
         count = {"done": 0, "skip": 0, "fail": 0}
+        self.batch_fail_reason = None
         for i, p in enumerate(paths):
             if self.batch_stop.is_set():
                 break
@@ -3022,6 +3316,8 @@ class App(_Base):
             text += "・略過 %d 張（輸出已存在）" % skip
         if fail:
             text += "・失敗 %d 張" % fail
+            if self.batch_fail_reason:
+                text += "（%s）" % self.batch_fail_reason
         self.set_status(text, RED if fail else (AMBER if skip else GREEN))
 
     def on_close(self):
