@@ -27,6 +27,7 @@ except ImportError:      # live light/dark switching of the tiles is a nicety, n
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 import ig_border
+from icon_paths import ICON_PATHS
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -66,6 +67,11 @@ TOKEN_BY_LABEL = {v: k for k, v in TOKEN_LABELS.items()}
 LINE_SIZE_LABELS = {"小": 85, "稍小": 95, "中": 100, "大": 125, "特大": 150}
 TONE_LABELS = {"主要（深）": "strong", "一般": "normal", "次要（灰）": "weak", "自訂色…": "custom"}
 ALIGN_LABELS = {"靠左": "left", "置中": "center", "靠右": "right"}
+TONE_SHORT = {"主要（深）": "深墨", "一般": "中灰", "次要（灰）": "淺灰", "自訂色…": "自訂"}
+TONE_BY_SHORT = {v: k for k, v in TONE_SHORT.items()}
+ITEM_ICON = {"logo": "brand_logo", "brand": "brand_logo", "model": "camera", "model_auto": "camera",
+             "brand_model": "camera", "lens": "lens", "focal": "focal", "aperture": "aperture", "shutter": "shutter",
+             "iso": "iso", "exposure": "exposure", "date": "date", "custom": "text"}
 BLOCK_TITLES = {"left": "左側區塊", "center": "中間區塊", "right": "右側區塊"}
 LAYOUT_NAME = {v: k for k, v in LAYOUT_LABELS.items()}
 LOGO_POS_LABELS = {"機型左側": "left", "右欄左側": "right", "兩欄中間": "center"}
@@ -214,14 +220,52 @@ ctk.CTkScrollbar._run_draw = _scrollbar_run_draw
 ctk.CTkScrollbar.set = _scrollbar_set
 
 
+class PaperOptionMenu(ctk.CTkOptionMenu):
+    """CTkOptionMenu whose drop-down arrow is a slim rounded chevron, drawn with the same stroke and size as the
+    other icons of the app (the stock arrow is a thick, large one)."""
+
+    def _draw(self, no_color_updates=False):
+        super()._draw(no_color_updates)
+        try:
+            c = self._canvas
+            co = c.coords("dropdown_arrow")
+            if len(co) == 6:
+                cx, cy = co[2], (co[1] + co[3]) / 2
+                k = self._apply_widget_scaling(1)
+                hw, hh = 4.5 * k, 2.6 * k
+                c.coords("dropdown_arrow", cx - hw, cy - hh, cx, cy + hh, cx + hw, cy - hh)
+                c.itemconfigure("dropdown_arrow", width=max(1.5, 1.8 * k))
+        except tk.TclError:
+            pass
+
+
 class SmoothScrollFrame(ctk.CTkScrollableFrame):
     """CTkScrollableFrame whose wheel handling copes with Tk 9 on macOS (120-step mouse wheels,
     tiny or fractional trackpad deltas) instead of silently failing. Works for both orientations."""
 
     _acc = 0.0
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, autohide=False, **kwargs):
+        """autohide: show the scroll bar only while the content is taller (wider) than the frame."""
         super().__init__(*args, **kwargs)
+        if autohide:
+            bar, orient = self._scrollbar, str(kwargs.get("orientation", "vertical"))
+            canvas = self._parent_canvas
+
+            def on_scroll(lo, hi):
+                bar.set(lo, hi)
+                fits = float(lo) <= 0.0 and float(hi) >= 1.0
+                try:
+                    shown = bool(bar.grid_info())             # (not winfo_ismapped: it is False before first show)
+                    if fits and shown:
+                        bar.grid_remove()
+                    elif not fits and not shown:
+                        bar.grid()
+                except tk.TclError:
+                    pass
+            canvas.configure(**{("xscrollcommand" if orient == "horizontal" else "yscrollcommand"): on_scroll})
+            view = canvas.xview if orient == "horizontal" else canvas.yview
+            self.recheck_bar = lambda: on_scroll(*view())
         try:   # Tk 9 on macOS sends trackpad scrolling as <TouchpadScroll>, not <MouseWheel>
             self.bind_all("<TouchpadScroll>", self._touchpad_all, add="+")
         except tk.TclError:
@@ -289,48 +333,99 @@ def _pill_font(size):
     return f or ig_border._font(size, True, "auto")
 
 
-def updown_icon(rgb, w=10, h=15, ss=8):
-    """macOS-style pop-up indicator: two small chevrons, one pointing up and one down (smooth, rounded caps)."""
-    img = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    lw = round(1.7 * ss)
-    cx, mid = w * ss / 2, h * ss / 2
-    arm, gap = 3.0 * ss, 1.6 * ss                    # half-width of a chevron and the gap between the two
-    for sign in (-1, 1):                              # -1: upper chevron (points up), +1: lower (points down)
-        tip_y = mid + sign * (gap + arm)
-        base_y = mid + sign * gap
-        pts = [(cx - arm, base_y), (cx, tip_y), (cx + arm, base_y)]
-        d.line(pts, fill=rgb + (255,), width=lw, joint="curve")
-        for x, y in pts[::2]:                         # round caps
-            d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=rgb + (255,))
-    return img.resize((w * 3, h * 3), Image.LANCZOS)  # 3x for Retina; shown at (w, h) points
+ICON_STROKE = 1.7                                  # points; Tk draws canvas lines at the screen's full resolution
+ICON_INK, ICON_WHITE = "#0C0C0C", "#FFFFFF"
+_SPACERS = {}
 
 
-_SELECT_ICON = None
+class VIcon:
+    """A line icon (Lucide, see tools/make_icons.py) drawn as vectors on a tk.Canvas, so it is sharp on Retina where
+    a Tk image (1 px = 1 pt, then up-scaled) never is."""
+    __slots__ = ("name", "white", "size")
+
+    def __init__(self, name, white=False, size=16):
+        self.name, self.white, self.size = name, white, size
 
 
-def chevron_icon(direction, rgb=(27, 27, 27), size=10, ss=8):
-    """A single rounded chevron ("right" or "down"), drawn like the 選擇 pop-up indicator (same stroke, same ink)."""
-    n = size * ss
-    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    lw = round(1.7 * ss)
-    a, b = n * 0.30, n * 0.70
-    pts = [(a, a * 0.9), (b, n / 2), (a, n - a * 0.9)] if direction == "right" else [(a * 0.9, a), (n / 2, b), (n - a * 0.9, a)]
-    d.line(pts, fill=rgb + (255,), width=lw, joint="curve")
-    for x, y in pts[::2]:
-        d.ellipse((x - lw / 2, y - lw / 2, x + lw / 2, y + lw / 2), fill=rgb + (255,))
-    return img.resize((size * 3, size * 3), Image.LANCZOS)
+def icon_spacer(size):
+    """Transparent image that reserves the room of an icon inside a CTkButton."""
+    if size not in _SPACERS:
+        _SPACERS[size] = ctk.CTkImage(Image.new("RGBA", (size, size), (0, 0, 0, 0)), size=(size, size))
+    return _SPACERS[size]
 
 
-_CHEVRONS = {}
+def draw_icon(cv, icon):
+    cv.delete("all")
+    k = icon.size / 24.0
+    for poly in ICON_PATHS.get(icon.name, ()):
+        cv.create_line([v * k for pt in poly for v in pt], width=ICON_STROKE, capstyle="round", joinstyle="round",
+                       fill=ICON_WHITE if icon.white else ICON_INK)
+
+
+def icon_canvas(master, icon, bg):
+    cv = tk.Canvas(master, width=icon.size, height=icon.size, bd=0, highlightthickness=0, bg=bg)
+    draw_icon(cv, icon)
+    return cv
+
+
+class IconButton(ctk.CTkButton):
+    """CTkButton that accepts a VIcon as `image`: the icon is a canvas laid over the (blank) image slot."""
+
+    def __init__(self, *args, image=None, **kwargs):
+        icon = image if isinstance(image, VIcon) else None
+        self._vicon = None
+        super().__init__(*args, image=icon_spacer(icon.size) if icon else image, **kwargs)
+        if icon:
+            self._show_icon(icon)
+
+    def configure(self, require_redraw=False, **kwargs):
+        icon = kwargs.get("image")
+        if isinstance(icon, VIcon):
+            kwargs["image"] = icon_spacer(icon.size)
+        super().configure(require_redraw, **kwargs)
+        if isinstance(icon, VIcon):
+            self._show_icon(icon)
+
+    def _show_icon(self, icon):
+        lbl = self._image_label
+        if lbl is None:
+            return
+        ov = self._vicon
+        if ov is None:
+            ov = self._vicon = tk.Canvas(self, width=icon.size, height=icon.size, bd=0, highlightthickness=0,
+                                         bg=lbl.cget("bg"))
+            ov.place(in_=lbl, relx=0.5, rely=0.5, anchor="center", y=1)     # y: the image slot sits 1 pt high
+            for seq, fn in (("<Enter>", self._on_enter), ("<Leave>", self._on_leave),
+                            ("<ButtonRelease-1>", self._on_release)):
+                ov.bind(seq, fn, add="+")
+            for w in (self._canvas, self._text_label, lbl, ov):
+                if w is not None:
+                    for seq in ("<Enter>", "<Leave>", "<ButtonRelease-1>"):
+                        w.bind(seq, lambda e: self.after_idle(self._sync_icon_bg), add="+")
+            ov.configure(cursor=lbl.cget("cursor") or "")
+            try:
+                ov.bind("<Button-1>", lambda e: self._canvas.event_generate("<Button-1>"), add="+")
+            except tk.TclError:
+                pass
+        ov.configure(width=icon.size, height=icon.size)
+        draw_icon(ov, icon)
+        self._sync_icon_bg()
+
+    def _sync_icon_bg(self):
+        try:
+            if self._vicon is not None and self._image_label is not None:
+                self._vicon.configure(bg=self._image_label.cget("bg"))
+        except tk.TclError:
+            pass
+
+    def _draw(self, no_color_updates=False):
+        super()._draw(no_color_updates)
+        if getattr(self, "_vicon", None) is not None:
+            self._sync_icon_bg()
 
 
 def chevron(direction):
-    if direction not in _CHEVRONS:
-        im = chevron_icon(direction)
-        _CHEVRONS[direction] = ctk.CTkImage(light_image=im, dark_image=im, size=(10, 10))
-    return _CHEVRONS[direction]
+    return VIcon("chevron_" + direction, size=16)
 
 
 def unify_controls(root):
@@ -346,7 +441,7 @@ def unify_controls(root):
     for w in walk(root):
         try:
             t = type(w).__name__
-            if t == "CTkButton":
+            if t in ("CTkButton", "IconButton"):
                 h = int(w.cget("height"))
                 text = w.cget("text") or ""
                 if w.cget("image") is not None and h >= 60:          # ratio tiles
@@ -357,7 +452,7 @@ def unify_controls(root):
                     w.configure(corner_radius=8)
                     if h < 60 and w.cget("fg_color") != "transparent":
                         w.configure(height=snap(h))
-            elif t in ("CTkOptionMenu", "CTkEntry", "CTkSegmentedButton"):
+            elif t in ("CTkOptionMenu", "PaperOptionMenu", "CTkEntry", "CTkSegmentedButton"):
                 w.configure(corner_radius=8)
                 w.configure(height=snap(int(w.cget("height"))))
             elif t == "CTkLabel" and w.cget("fg_color") != "transparent":
@@ -366,13 +461,84 @@ def unify_controls(root):
             pass
 
 
+ICON_DIR = Path(__file__).resolve().parent.parent / "assets" / "icons"
+
+
+def item_icon(token):
+    """Icon of an item chip (None for a token without one)."""
+    return ui_icon(ITEM_ICON.get(token, ""))
+
+
+_TK_ICONS = {}
+
+
+def ui_icon(name, white=False, size=16):
+    """VIcon for a button (None if the icon is unknown). `white=True` is for dark / solid buttons."""
+    return VIcon(name, white, size) if name in ICON_PATHS else None
+
+
+def tk_icon(name, size=16):
+    """PhotoImage for a tk.Menu entry (menus cannot take CTkImage). None if the file is missing."""
+    key = (name, size)
+    if key not in _TK_ICONS:
+        icon = None
+        try:
+            img = Image.open(ICON_DIR / ("%s.png" % name)).convert("RGBA").resize((size, size), Image.LANCZOS)
+            icon = ImageTk.PhotoImage(img)
+        except (OSError, ValueError, tk.TclError):
+            pass
+        _TK_ICONS[key] = icon
+    return _TK_ICONS[key]
+
+
+# button text -> (icon name, white icon on a dark button)
+BUTTON_ICONS = {
+    "儲存": ("save", False), "刪除": ("trash", False), "編輯樣式…": ("edit", False), "全選": ("select_all", False),
+    "取消全選": ("select_none", False), "重設": ("reset", False), "重設為預設": ("reset", False),
+    "載入樣式檔…": ("load", False), "儲存樣式檔…": ("save", False), "完成": ("check", True),
+    "加入資料夾…": ("folder_add", False), "匯入照片…": ("image_in", False), "移除勾選的": ("remove", False),
+    "清除失效項目": ("clean", False), "按住對照原圖": ("compare", False), "適合視窗": ("fit", False),
+    "開啟輸出資料夾": ("folder", False), "↻": ("reset", False),
+    "匯出": ("export", True), "停止匯出": ("stop", True), "取消": ("close", False), "覆蓋": ("check", True),
+    "只匯出新的": ("add", False),
+}
+CARD_ICONS = {"預設組合": "look", "來源與輸出": "source", "邊框": "border",
+              "相機資訊": "camera", "資訊列細節": "exposure"}
+
+
+def icon_kw(name):
+    """image / compound arguments for a tk.Menu entry; empty when the icon file is missing."""
+    img = tk_icon(name) if name else None
+    return {"image": img, "compound": "left"} if img is not None else {}
+
+
+def decorate_icons(root):
+    """Give the plain text buttons a small icon (the icon replaces a leading ＋ / － of the label)."""
+    def walk(w):
+        yield w
+        for c in w.winfo_children():
+            yield from walk(c)
+    for w in walk(root):
+        try:
+            if type(w).__name__ not in ("CTkButton", "IconButton") or w.cget("image") is not None:
+                continue
+            text = (w.cget("text") or "").strip()
+            bare = text.lstrip("＋－+- ").strip()
+            key = bare if bare in BUTTON_ICONS else ("匯出" if text.startswith("匯出") else None)
+            if key is None:
+                continue
+            name, white = BUTTON_ICONS[key]
+            img = ui_icon(name, white=white)
+            if img is None:
+                continue
+            w.configure(image=img, compound="left", text=bare if bare != text else text)
+        except (tk.TclError, ValueError, TypeError, AttributeError):
+            pass
+
+
 def select_icon():
-    """CTkImage for the 選擇 buttons: dark glyph on light mode, light glyph on dark mode."""
-    global _SELECT_ICON
-    if _SELECT_ICON is None:
-        _SELECT_ICON = ctk.CTkImage(light_image=updown_icon((38, 38, 42)), dark_image=updown_icon((236, 230, 222)),
-                                    size=(10, 15))
-    return _SELECT_ICON
+    """Up/down chevrons of the 選擇 buttons."""
+    return VIcon("updown", size=12)
 
 
 # ---- persistent thumbnail cache --------------------------------------------------------------------------------
@@ -567,9 +733,9 @@ class TextPrompt(ctk.CTkToplevel):
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=2, column=0, sticky="e", padx=24, pady=(16, 20))
         small = dict(height=34, corner_radius=8, width=84, font=ctk.CTkFont(size=13))
-        ctk.CTkButton(bar, text="取消", fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"),
+        IconButton(bar, text="取消", fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"),
                       command=self.cancel, **small).grid(row=0, column=0, padx=(0, 8))
-        ctk.CTkButton(bar, text=ok_text, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
+        IconButton(bar, text=ok_text, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
                       command=self.accept, **small).grid(row=0, column=1)
         self.bind("<Return>", lambda e: self.accept())
         self.bind("<Escape>", lambda e: self.cancel())
@@ -622,14 +788,14 @@ class ExistsDialog(ctk.CTkToplevel):
         small = dict(height=34, corner_radius=8, font=ctk.CTkFont(size=13))
         col = 0
         if can_skip:
-            ctk.CTkButton(bar, text="只匯出新的", width=104, fg_color=BTN, hover_color=BTN_HOVER,
+            IconButton(bar, text="只匯出新的", width=104, fg_color=BTN, hover_color=BTN_HOVER,
                           text_color=("gray10", "gray95"), command=lambda: self.done("skip"), **small
                           ).grid(row=0, column=col, padx=(0, 8))
             col += 1
-        ctk.CTkButton(bar, text="取消", width=84, fg_color=BTN, hover_color=BTN_HOVER,
+        IconButton(bar, text="取消", width=84, fg_color=BTN, hover_color=BTN_HOVER,
                       text_color=("gray10", "gray95"), command=self.cancel, **small
                       ).grid(row=0, column=col, padx=(0, 8))
-        ctk.CTkButton(bar, text="覆蓋", width=84, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
+        IconButton(bar, text="覆蓋", width=84, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
                       command=lambda: self.done("overwrite"), **small).grid(row=0, column=col + 1)
         self.bind("<Escape>", lambda e: self.cancel())
         self.update_idletasks()
@@ -672,6 +838,9 @@ class StyleEditor(ctk.CTkToplevel):
         self.loading = False
         self.job = None
         self.blocks = {}
+        self.focus = "center"                     # the block shown in full; the other two are summaries
+        self._widths = {}
+        self._anim = 0
         self.divider_var = tk.BooleanVar(value=False)
         self.pv_photo = None
         self.pv_key = None
@@ -681,6 +850,7 @@ class StyleEditor(ctk.CTkToplevel):
         app.footer_on.set(True)
         self.render_preview()
         unify_controls(self)
+        decorate_icons(self)
         self.update_idletasks()
         self.place_over(app)
         self.deiconify()
@@ -708,7 +878,7 @@ class StyleEditor(ctk.CTkToplevel):
         w, h = canvas.size
         strip = canvas.crop((0, int(h * 0.62), w, h))                 # the footer and the bottom of the photo
         box_w = max(400, self.winfo_width() - 56)
-        scale = min(box_w / strip.width, 190 / strip.height)
+        scale = min(box_w / strip.width, 120 / strip.height)
         strip = strip.resize((max(1, round(strip.width * scale)), max(1, round(strip.height * scale))), Image.LANCZOS)
         framed = Image.new("RGB", (strip.width + 2, strip.height + 2), (150, 150, 150))
         framed.paste(strip, (1, 1))
@@ -743,7 +913,7 @@ class StyleEditor(ctk.CTkToplevel):
         start.grid(row=2, column=0, sticky="e", padx=20)
         ctk.CTkLabel(start, text="從樣式開始：", text_color=MUTED, font=ctk.CTkFont(size=12)).grid(row=0, column=0)
         for i, name in enumerate(FOOTER_LOOKS):
-            ctk.CTkButton(start, text=name, width=70, height=26, corner_radius=8, fg_color=BTN, hover_color=BTN_HOVER,
+            IconButton(start, text=name, width=70, height=26, corner_radius=8, fg_color=BTN, hover_color=BTN_HOVER,
                           text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12),
                           command=lambda n=name: self.start_from(n)).grid(row=0, column=i + 1, padx=2)
         pvf = ctk.CTkFrame(self, corner_radius=14, fg_color=PV_BG)
@@ -756,83 +926,109 @@ class StyleEditor(ctk.CTkToplevel):
         self.pv_label.grid(row=1, column=0, padx=12, pady=(4, 12))
         cols = ctk.CTkFrame(self, fg_color="transparent")
         cols.grid(row=4, column=0, sticky="nsew", padx=14)
+        cols.rowconfigure(0, weight=1)               # the block cards run down to the button bar
         self.rowconfigure(4, weight=1)
-        menu = dict(height=28, corner_radius=8, fg_color=BTN, button_color=BTN_HOVER, button_hover_color=BTN_HOVER,
-                    text_color=("gray10", "gray95"), dropdown_text_color=("gray10", "gray95"),
-                    font=ctk.CTkFont(size=12))
         check = dict(checkbox_width=16, checkbox_height=16, fg_color=ACCENT, hover_color=ACCENT_HOVER,
                      font=ctk.CTkFont(size=12))
+        seg = dict(height=28, corner_radius=8, selected_color=SEL, selected_hover_color=SEL_HOVER,
+                   unselected_color=BTN, unselected_hover_color=BTN_HOVER, text_color=("gray10", "gray95"),
+                   font=ctk.CTkFont(size=12))
+        cap = dict(text_color=MUTED, font=ctk.CTkFont(size=12))
         for c, name in enumerate(ig_border.STYLE_BLOCKS):
-            cols.columnconfigure(c, weight=1, uniform="blk")
+            cols.columnconfigure(c, weight=self.FOCUS_W if name == self.focus else self.SIDE_W)
+            self._widths[name] = float(self.FOCUS_W if name == self.focus else self.SIDE_W)
             card = ctk.CTkFrame(cols, corner_radius=14, fg_color=CARD, border_width=BORDER_W, border_color=INK)
             card.grid(row=0, column=c, sticky="nsew", padx=6, pady=4)
-            head = ctk.CTkFrame(card, fg_color="transparent")
-            head.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
-            head.columnconfigure(0, weight=1)
-            ctk.CTkLabel(head, text=BLOCK_TITLES[name], font=ctk.CTkFont(size=13, weight="bold")
-                         ).grid(row=0, column=0, sticky="w")
-            align = tk.StringVar(value="靠左")
-            ctk.CTkOptionMenu(head, values=list(ALIGN_LABELS), variable=align, width=78, **menu).grid(row=0, column=1)
+            card.columnconfigure(0, weight=1)
+            title_lbl = ctk.CTkLabel(card, text=BLOCK_TITLES[name], font=ctk.CTkFont(size=15, weight="bold"),
+                                     anchor="w")
+            title_lbl.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
+            # fixed-height card: the contents scroll (wheel / trackpad) when they do not fit
+            body = SmoothScrollFrame(card, corner_radius=0, fg_color="transparent", height=60, autohide=True,
+                                     **SCROLLBAR)
+            body.grid(row=1, column=0, sticky="nsew", padx=(4, 4), pady=(0, 8))
+            body.columnconfigure(0, weight=1)
+            card.rowconfigure(1, weight=1)
+            align = tk.StringVar(value="靠左")           # no control: a block keeps its natural alignment
             align.trace_add("write", lambda *a: self.changed())
-            opts = ctk.CTkFrame(card, fg_color="transparent")
-            opts.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
-            logo_v, rule_v = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
-            ctk.CTkCheckBox(opts, text="logo 在文字左側", variable=logo_v, width=120, command=self.changed, **check
-                            ).grid(row=0, column=0, sticky="w")
-            ctk.CTkCheckBox(opts, text="logo 後加分隔線", variable=rule_v, width=110, command=self.changed, **check
-                            ).grid(row=0, column=1, sticky="w", padx=(6, 0))
-            if name == "right":
-                ctk.CTkCheckBox(opts, text="整個區塊前加一條分隔線", variable=self.divider_var, width=200,
-                                command=self.changed, **check).grid(row=1, column=0, columnspan=2, sticky="w",
-                                                                    pady=(6, 0))
             lines = []
             for i in range(ig_border.MAX_STYLE_LINES):
-                box = ctk.CTkFrame(card, corner_radius=10, fg_color=BTN)
-                box.grid(row=2 + i, column=0, sticky="ew", padx=10, pady=(0, 8))
+                box = ctk.CTkFrame(body, corner_radius=10, fg_color=CARD, border_width=1, border_color="#929292")
+                box.grid(row=i, column=0, sticky="ew", padx=8, pady=(0, 8))
                 box.columnconfigure(0, weight=1)
-                ctk.CTkLabel(box, text="第 %d 行" % (i + 1), text_color=MUTED, font=ctk.CTkFont(size=11)
-                             ).grid(row=0, column=0, sticky="w", padx=10, pady=(6, 0))
                 box.grid_remove() if i > 0 else None
-                items = []
-                irow = ctk.CTkFrame(box, fg_color="transparent")
-                irow.grid(row=1, column=0, sticky="ew", padx=6, pady=(2, 4))
-                for k in range(self.ITEMS):
-                    v = tk.StringVar(value=TOKEN_LABELS[""])
-                    ctk.CTkOptionMenu(irow, values=list(TOKEN_LABELS.values()), variable=v, width=92, **menu
-                                      ).grid(row=0, column=k, padx=2)
+                items = [tk.StringVar(value=TOKEN_LABELS[""]) for _ in range(self.ITEMS)]
+                for v in items:
                     v.trace_add("write", lambda *a: self.changed())
-                    items.append(v)
-                orow = ctk.CTkFrame(box, fg_color="transparent")
-                orow.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 8))
-                bold = tk.BooleanVar(value=False)
-                ctk.CTkCheckBox(orow, text="粗體", variable=bold, width=58, command=self.changed, **check
-                                ).grid(row=0, column=0, padx=(4, 4))
                 size = tk.StringVar(value="中")
-                cap = dict(text_color=MUTED, font=ctk.CTkFont(size=11))
-                ctk.CTkLabel(orow, text="字級", **cap).grid(row=0, column=1, padx=(4, 0))
-                ctk.CTkOptionMenu(orow, values=list(LINE_SIZE_LABELS), variable=size, width=62, **menu
-                                  ).grid(row=0, column=2, padx=2)
                 tone = tk.StringVar(value="主要（深）")
+                tone_short = tk.StringVar(value=TONE_SHORT["主要（深）"])
+                bold = tk.BooleanVar(value=False)
                 sep = tk.BooleanVar(value=False)
                 line = {"items": items, "bold": bold, "size": size, "tone": tone, "sep": sep, "hex": None,
-                        "box": box, "orow": orow}
-                ctk.CTkLabel(orow, text="顏色", **cap).grid(row=0, column=3, padx=(6, 0))
-                ctk.CTkOptionMenu(orow, values=list(TONE_LABELS), variable=tone, width=92,
-                                  command=lambda v, ln=line: self.on_tone(ln, v), **menu).grid(row=0, column=4, padx=2)
-                ctk.CTkCheckBox(orow, text="項目之間加線", variable=sep, width=100, command=self.changed, **check
-                                ).grid(row=1, column=0, columnspan=5, sticky="w", padx=(4, 0), pady=(6, 0))
+                        "box": box, "sel": None}
+                # row 1: title | bold | size      row 2: colour | divider      (the two rows hide while empty)
+                orow = ctk.CTkFrame(box, fg_color="transparent")
+                orow.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 2))
+                orow.columnconfigure(2, weight=1)
+                ctk.CTkLabel(orow, text="第 %d 行" % (i + 1), font=ctk.CTkFont(size=13, weight="bold")
+                             ).grid(row=0, column=0, sticky="w", padx=(2, 8))
+                bold_btn = IconButton(orow, text="B", width=30, height=28, corner_radius=8,
+                                         font=ctk.CTkFont(size=13, weight="bold"),
+                                         command=lambda v=bold: (v.set(not v.get()), self.changed()))
+                bold_btn.grid(row=0, column=1, sticky="w")
+                def paint_bold(*_, b=bold, w=bold_btn):
+                    on = bool(b.get())
+                    w.configure(fg_color=ACCENT if on else BTN, hover_color=ACCENT_HOVER if on else BTN_HOVER,
+                                text_color="white" if on else ("gray10", "gray95"))
+                bold.trace_add("write", paint_bold)
+                paint_bold()
+                ctk.CTkSegmentedButton(orow, values=list(LINE_SIZE_LABELS), variable=size,
+                                       command=lambda v: self.changed(), **seg).grid(row=0, column=2, sticky="e")
+                crow = ctk.CTkFrame(box, fg_color="transparent")
+                crow.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
+                crow.columnconfigure(1, weight=1)
+                ctk.CTkLabel(crow, text="字色", **cap).grid(row=0, column=0, sticky="w", padx=(2, 8))
+                ctk.CTkSegmentedButton(crow, values=list(TONE_SHORT.values()), variable=tone_short,
+                                       command=lambda v, ln=line: self.on_tone_short(ln, v), **seg
+                                       ).grid(row=0, column=1, sticky="w")
+                ctk.CTkCheckBox(crow, text="加線", variable=sep, width=60, command=self.changed, **check
+                                ).grid(row=0, column=2, sticky="e")
+                tone.trace_add("write", lambda *a, t=tone, ts=tone_short: ts.set(TONE_SHORT.get(t.get(), "深墨")))
+                line["orow"] = orow
+                line["crow"] = crow
+                # the items: chips and an inline "＋"
+                chips = ctk.CTkFrame(box, fg_color="#F4F4F4", corner_radius=8, border_width=1, border_color="#929292")
+                chips.grid(row=2, column=0, sticky="ew", padx=10, pady=(2, 10))
+                line["chips"] = chips
+                line["add"] = None
                 size.trace_add("write", lambda *a: self.changed())
                 lines.append(line)
-            self.blocks[name] = {"align": align, "logo": logo_v, "rule": rule_v, "lines": lines}
+            # block-level options
+            opts = ctk.CTkFrame(body, fg_color="transparent", height=1)       # empty for left / centre: no 200 px default
+            opts.grid(row=ig_border.MAX_STYLE_LINES, column=0, sticky="ew", padx=10, pady=(0, 12))
+            logo_v, rule_v = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+            # (logo_v / rule_v have no checkbox: a built-in look may put the logo and a divider beside the block,
+            # and those values are kept as they are)
+            if name == "right":
+                ctk.CTkCheckBox(opts, text="整個區塊前加一條分隔線", variable=self.divider_var, command=self.changed,
+                                **check).grid(row=0, column=0, sticky="w")
+            summary = ctk.CTkFrame(body, fg_color="transparent")      # read-only copy of the lines, filled below
+            summary.columnconfigure(0, weight=1)
+            summary.grid(row=1 + ig_border.MAX_STYLE_LINES, column=0, sticky="new", padx=8, pady=(0, 8))
+            self.blocks[name] = {"align": align, "logo": logo_v, "rule": rule_v, "lines": lines, "opts": opts,
+                                 "summary": summary, "card": card, "body": body}
+            for w in (card, title_lbl, summary):          # a click on a side block brings it to the front
+                w.bind("<Button-1>", lambda e, n=name: self.set_focus(n), add="+")
         self.refresh_lines()
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=5, column=0, sticky="ew", padx=20, pady=(8, 16))
         bar.columnconfigure(1, weight=1)
         small = dict(height=34, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"))
-        ctk.CTkButton(bar, text="重設為預設", width=96, command=self.reset, **small).grid(row=0, column=2, padx=4)
-        ctk.CTkButton(bar, text="載入樣式檔…", width=110, command=self.load_file, **small).grid(row=0, column=3, padx=4)
-        ctk.CTkButton(bar, text="儲存樣式檔…", width=110, command=self.save_file, **small).grid(row=0, column=4, padx=4)
-        ctk.CTkButton(bar, text="完成", width=80, height=34, corner_radius=10, fg_color=ACCENT,
+        IconButton(bar, text="重設為預設", width=96, command=self.reset, **small).grid(row=0, column=2, padx=4)
+        IconButton(bar, text="載入樣式檔…", width=110, command=self.load_file, **small).grid(row=0, column=3, padx=4)
+        IconButton(bar, text="儲存樣式檔…", width=110, command=self.save_file, **small).grid(row=0, column=4, padx=4)
+        IconButton(bar, text="完成", width=80, height=34, corner_radius=10, fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, command=self.close).grid(row=0, column=5, padx=(8, 0))
 
     # ---- model <-> widgets ----
@@ -890,20 +1086,318 @@ class StyleEditor(ctk.CTkToplevel):
         self.set_origin()
 
     def refresh_lines(self):
-        """A line's settings only matter once it has items; line 2 only shows up after line 1 is used."""
-        for blk in self.blocks.values():
+        self.apply_visibility()
+        self.refresh_chips()
+
+    def apply_visibility(self, all_summary=False):
+        """A line's settings only matter once it has items; line 2 only shows up after line 1 is used. Only the
+        focused block shows its lines; the others show their summary. (Cheap: no widget is rebuilt.)"""
+        for name, blk in self.blocks.items():
             prev_used = True
+            full = name == self.focus and not all_summary
+            if full:
+                blk["opts"].grid()
+                blk["summary"].grid_remove()
+            else:
+                blk["opts"].grid_remove()
+                blk["summary"].grid()
             for i, ln in enumerate(blk["lines"]):
                 used = any(v.get() != TOKEN_LABELS[""] for v in ln["items"])
-                if i == 0 or prev_used or used:
+                if full and (i == 0 or prev_used or used):
                     ln["box"].grid()
                 else:
                     ln["box"].grid_remove()
                 if used:
                     ln["orow"].grid()
+                    ln["crow"].grid()
+                    ln["chips"].grid_configure(pady=(2, 10))
                 else:
                     ln["orow"].grid_remove()
+                    ln["crow"].grid_remove()
+                    ln["chips"].grid_configure(pady=(10, 10))      # alone in the box: same gap above and below
                 prev_used = used
+
+    FOCUS_W, SIDE_W = 300, 100
+
+    def set_focus(self, name):
+        """Widen one block (full settings) and fold the other two into summaries."""
+        if name == self.focus or name not in self.blocks:
+            return
+        self.focus = name
+        self.apply_visibility(all_summary=True)      # light content while the columns move (full settings re-lay out slowly)
+        for blk in self.blocks.values():             # a scroll bar redraws on every width step: keep it away meanwhile
+            try:
+                blk["body"]._scrollbar.grid_remove()
+            except tk.TclError:
+                pass
+        self._anim += 1
+        self.animate_widths(self._anim, 0, dict(self._widths))
+
+    def animate_widths(self, token, step, start, steps=3):
+        if token != self._anim:
+            return
+        t = (step + 1) / steps
+        e = 1 - (1 - t) ** 3
+        try:
+            for c, name in enumerate(ig_border.STYLE_BLOCKS):
+                goal = self.FOCUS_W if name == self.focus else self.SIDE_W
+                self._widths[name] = start[name] + (goal - start[name]) * e
+                self.blocks[name]["card"].master.columnconfigure(c, weight=max(1, int(self._widths[name])))
+            if step + 1 < steps:
+                self.after(1, lambda: self.animate_widths(token, step + 1, start, steps))
+            else:
+                self.apply_visibility()              # now show the focused block in full
+                for blk in self.blocks.values():
+                    blk["body"].after_idle(blk["body"].recheck_bar)
+        except tk.TclError:
+            pass
+
+    def refresh_summary(self):
+        """The folded blocks: each line as the same outlined box the open block uses, its items as small chips."""
+        for name, blk in self.blocks.items():
+            box = blk["summary"]
+            key = tuple(tuple(self.line_labels(ln)) for ln in blk["lines"])
+            if blk.get("summary_key") == key:
+                continue
+            blk["summary_key"] = key
+            for w in box.winfo_children():
+                w.destroy()
+            made = []
+            r = 0
+            for i, ln in enumerate(blk["lines"]):
+                labels = self.line_labels(ln)
+                if not labels:
+                    continue
+                line = ctk.CTkFrame(box, corner_radius=10, fg_color=CARD, border_width=1, border_color="#929292")
+                line.grid(row=r, column=0, sticky="ew", pady=(0, 8))
+                line.columnconfigure(0, weight=1)
+                head = ctk.CTkLabel(line, text="第 %d 行" % (i + 1), anchor="w", text_color=MUTED,
+                                    font=ctk.CTkFont(size=12, weight="bold"))
+                head.grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+                made += [line, head]
+                for k, label in enumerate(labels):
+                    chip = ctk.CTkFrame(line, corner_radius=8, fg_color="#FFFFFF", border_width=BORDER_W,
+                                        border_color=INK)
+                    chip.grid(row=1 + k, column=0, sticky="w", padx=10, pady=(0, 8))
+                    col = 0
+                    icon = item_icon(TOKEN_BY_LABEL.get(label, ""))
+                    if icon is not None:
+                        cv = icon_canvas(chip, icon, "#FFFFFF")
+                        cv.grid(row=0, column=0, padx=(8, 0))
+                        made.append(cv)
+                        col = 1
+                    txt = ctk.CTkLabel(chip, text=label, font=ctk.CTkFont(size=12))
+                    txt.grid(row=0, column=col, padx=(4 if icon is not None else 8, 8), pady=3)
+                    made += [chip, txt]
+                r += 1
+            if r == 0:
+                empty = ctk.CTkLabel(box, text="沒有項目", text_color=MUTED, anchor="w", font=ctk.CTkFont(size=12))
+                empty.grid(row=0, column=0, sticky="w", padx=4)
+                made.append(empty)
+            for w in made:                                  # a click anywhere on the summary opens the block
+                w.bind("<Button-1>", lambda e, n=name: self.set_focus(n), add="+")
+
+    # ---- items as chips ----
+    @staticmethod
+    def line_labels(ln):
+        return [v.get() for v in ln["items"] if v.get() != TOKEN_LABELS[""]]
+
+    def set_line_labels(self, ln, labels):
+        for k, v in enumerate(ln["items"]):
+            v.set(labels[k] if k < len(labels) else TOKEN_LABELS[""])
+
+    def add_item_menu(self, ln):
+        if len(self.line_labels(ln)) >= self.ITEMS:
+            return
+        m = tk.Menu(self, tearoff=0)
+        for label in TOKEN_LABELS.values():
+            if label != TOKEN_LABELS[""]:
+                m.add_command(label=label, command=lambda lab=label: self.set_line_labels(
+                    ln, self.line_labels(ln) + [lab]),
+                    **icon_kw(ITEM_ICON.get(TOKEN_BY_LABEL.get(label, ""), "")))
+        b = ln["add"] or ln["chips"]
+        try:
+            m.tk_popup(b.winfo_rootx(), b.winfo_rooty() + b.winfo_height())
+        finally:
+            m.grab_release()
+
+    def remove_item(self, ln, idx):
+        labels = self.line_labels(ln)
+        if 0 <= idx < len(labels):
+            del labels[idx]
+            self.set_line_labels(ln, labels)
+
+    def move_item(self, ln, idx, d):
+        labels = self.line_labels(ln)
+        j = idx + d
+        if 0 <= idx < len(labels) and 0 <= j < len(labels):
+            labels[idx], labels[j] = labels[j], labels[idx]
+            self.set_line_labels(ln, labels)
+
+    def on_tone_short(self, ln, short):
+        label = TONE_BY_SHORT.get(short, "主要（深）")
+        ln["tone"].set(label)
+        self.on_tone(ln, label)
+
+    def refresh_chips(self):
+        tiny = dict(width=22, height=24, corner_radius=6, fg_color="transparent", hover_color=BTN_HOVER,
+                    text_color=("gray10", "gray95"), border_width=0, font=ctk.CTkFont(size=11))
+        for blk in self.blocks.values():
+            for ln in blk["lines"]:
+                labels = self.line_labels(ln)
+                if ln["sel"] is not None and ln["sel"] >= len(labels):
+                    ln["sel"] = None
+                key = (tuple(labels), ln["sel"], len(labels) < self.ITEMS)
+                if ln.get("built") == key:                     # unchanged line: keep its widgets (rebuilding is slow)
+                    continue
+                ln["built"] = key
+                for w in ln["chips"].winfo_children():
+                    w.destroy()
+                cells = []
+                ln["chip_w"] = []
+                for idx, label in enumerate(labels):
+                    chip = ctk.CTkFrame(ln["chips"], corner_radius=8, border_width=BORDER_W, border_color=INK,
+                                        fg_color="#E4E4E4" if ln["sel"] == idx else "#FFFFFF")
+                    col = 0
+                    icon = item_icon(TOKEN_BY_LABEL.get(label, ""))
+                    if icon is not None:
+                        icon_cv = icon_canvas(chip, icon, "#E4E4E4" if ln["sel"] == idx else "#FFFFFF")
+                        icon_cv.grid(row=0, column=col, padx=(8, 0))
+                        col += 1
+                    name = ctk.CTkLabel(chip, text=label, font=ctk.CTkFont(size=12), cursor="hand2")
+                    name.grid(row=0, column=col, padx=(8 if icon is None else 4, 2), pady=3)
+                    for w in (chip, name) + ((icon_cv,) if icon is not None else ()):
+                        w.bind("<ButtonPress-1>", lambda e, l=ln, i=idx: self.chip_press(l, i, e), add="+")
+                        w.bind("<B1-Motion>", self.chip_motion, add="+")
+                        w.bind("<ButtonRelease-1>", self.chip_release, add="+")
+                    col += 1
+                    if ln["sel"] == idx:                       # the selected chip shows its re-order arrows
+                        if idx > 0:
+                            IconButton(chip, text="◀", command=lambda l=ln, i=idx: self.move_item(l, i, -1),
+                                          **tiny).grid(row=0, column=col)
+                            col += 1
+                        if idx < len(labels) - 1:
+                            IconButton(chip, text="▶", command=lambda l=ln, i=idx: self.move_item(l, i, 1),
+                                          **tiny).grid(row=0, column=col)
+                            col += 1
+                    IconButton(chip, text="✕", command=lambda l=ln, i=idx: self.remove_item(l, i), **tiny
+                                  ).grid(row=0, column=col, padx=(0, 3))
+                    cells.append(chip)
+                    ln["chip_w"].append(chip)
+                if len(labels) < self.ITEMS:
+                    add = IconButton(ln["chips"], text="＋ 加入" if labels else "＋ 加入項目", height=26,
+                                        corner_radius=8, fg_color=BTN, hover_color=BTN_HOVER,
+                                        text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12), width=70,
+                                        command=lambda l=ln: self.add_item_menu(l))
+                    ln["add"] = add
+                    cells.append(add)
+                else:
+                    ln["add"] = None
+                ln["cells"] = cells
+                self.layout_cells(ln)
+        self.refresh_summary()
+
+    # ---- dragging a chip: a floating copy follows the pointer, its old slot stays as an empty outline, and the
+    # other chips make room as the pointer passes them (live re-ordering, like a sortable list) ----
+    _drag = None
+
+    def chip_press(self, ln, idx, e):
+        labels = self.line_labels(ln)
+        if not 0 <= idx < len(labels) or idx >= len(ln.get("chip_w", [])):
+            return
+        self._drag = {"ln": ln, "idx": idx, "x": e.x_root, "y": e.y_root, "on": False, "w": ln["chip_w"][idx],
+                      "order": list(range(len(labels))), "labels": labels, "ghost": None}
+
+    def chip_under(self, ln, x, y, skip):
+        for w in ln.get("chip_w", []):
+            if w is skip:
+                continue
+            try:
+                if (w.winfo_rootx() <= x < w.winfo_rootx() + w.winfo_width()
+                        and w.winfo_rooty() <= y < w.winfo_rooty() + w.winfo_height()):
+                    return w
+            except tk.TclError:
+                pass
+        return None
+
+    def chip_lift(self, d):
+        w = d["w"]
+        gw, gh = w.winfo_width(), w.winfo_height()
+        ghost = tk.Label(self, text=d["labels"][d["idx"]], font=ctk.CTkFont(size=12), bg="#FFFFFF", fg=INK, bd=0,
+                         highlightthickness=BORDER_W, highlightbackground=INK, cursor="fleur")
+        ghost.configure(width=max(4, gw // 9))
+        d["ghost"] = ghost
+        d["off"] = (gw // 2, gh // 2)
+        w.grid_propagate(False)                       # keep the slot's size while it is emptied
+        w.configure(width=gw, height=gh, fg_color="#F4F4F4", border_color="#B0B0B0")
+        for c in w.winfo_children():
+            c.grid_remove()
+        d["ln"]["built"] = None                       # this line is rebuilt after the drop
+        self.configure(cursor="fleur")
+
+    def chip_motion(self, e):
+        d = self._drag
+        if not d:
+            return
+        if not d["on"]:
+            if abs(e.x_root - d["x"]) + abs(e.y_root - d["y"]) <= 6:
+                return
+            d["on"] = True
+            try:
+                self.chip_lift(d)
+            except tk.TclError:
+                self._drag = None
+                return
+        ghost, ln = d["ghost"], d["ln"]
+        try:
+            ghost.place(x=e.x_root - self.winfo_rootx() - d["off"][0], y=e.y_root - self.winfo_rooty() - d["off"][1])
+            ghost.lift()
+            over = self.chip_under(ln, e.x_root, e.y_root, d["w"])
+            if over is not None:
+                chips = ln["chip_w"]
+                i, j = chips.index(d["w"]), chips.index(over)
+                chips.insert(j, chips.pop(i))
+                d["order"].insert(j, d["order"].pop(i))
+                ln["cells"] = chips + [w for w in ln["cells"] if w not in chips]
+                self.layout_cells(ln)
+        except (tk.TclError, ValueError):
+            pass
+
+    def chip_release(self, e):
+        d, self._drag = self._drag, None
+        if not d:
+            return
+        ln = d["ln"]
+        if not d["on"]:
+            self.select_chip(ln, d["idx"])
+            return
+        try:
+            d["ghost"].destroy()
+            self.configure(cursor="")
+        except (tk.TclError, AttributeError):
+            pass
+        if d["order"] != sorted(d["order"]):
+            ln["sel"] = None                          # moved by hand: no need for the arrows
+            self.set_line_labels(ln, [d["labels"][i] for i in d["order"]])
+        self.refresh_chips()
+
+    @staticmethod
+    def layout_cells(ln):
+        """Two chips per row, each at its own width (no shared columns), 8 px inset on the left, top and bottom."""
+        host, cells = ln["chips"], ln["cells"]
+        host.update_idletasks()
+        y = 8
+        for i in range(0, len(cells), 2):
+            row, x = cells[i:i + 2], 8
+            for w in row:
+                w.place(x=x, y=y)
+                x += w.winfo_reqwidth() + 8
+            y += max(w.winfo_reqheight() for w in row) + 8
+        host.configure(height=y)
+
+    def select_chip(self, ln, idx):
+        ln["sel"] = None if ln["sel"] == idx else idx
+        self.refresh_chips()
 
     def start_from(self, name):
         look = FOOTER_LOOKS.get(name)
@@ -1277,17 +1771,18 @@ class SourceManager(ctk.CTkToplevel):
         bar.grid(row=3, column=0, sticky="ew", padx=20, pady=(10, 16))
         bar.columnconfigure(2, weight=1)
         btn = dict(height=34, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"))
-        ctk.CTkButton(bar, text="＋ 加入資料夾…", width=116, command=self.add_folder, **btn).grid(row=0, column=0)
-        ctk.CTkButton(bar, text="＋ 匯入照片…", width=104, command=self.import_photos, **btn
+        IconButton(bar, text="＋ 加入資料夾…", width=116, command=self.add_folder, **btn).grid(row=0, column=0)
+        IconButton(bar, text="＋ 匯入照片…", width=104, command=self.import_photos, **btn
                       ).grid(row=0, column=1, padx=(6, 0))
-        ctk.CTkButton(bar, text="－ 移除勾選的", width=104, command=self.remove_picked, **btn
+        IconButton(bar, text="－ 移除勾選的", width=104, command=self.remove_picked, **btn
                       ).grid(row=0, column=3, padx=(0, 6))
-        self.clean_btn = ctk.CTkButton(bar, text="清除失效項目", width=116, command=self.clear_missing, **btn)
+        self.clean_btn = IconButton(bar, text="清除失效項目", width=116, command=self.clear_missing, **btn)
         self.clean_btn.grid(row=0, column=4, padx=(0, 6))
-        ctk.CTkButton(bar, text="完成", width=80, height=34, corner_radius=10, fg_color=ACCENT,
+        IconButton(bar, text="完成", width=80, height=34, corner_radius=10, fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, command=self.close).grid(row=0, column=5)
         self.build_rows()
         unify_controls(self)
+        decorate_icons(self)
         self.update_idletasks()
         place_over_app(self, app, 820, 560)
         self.deiconify()
@@ -1434,7 +1929,7 @@ class App(_Base):
         self.source_manager = None
         self.out_var = tk.StringVar(value=self.clean_path(cfg.get("output")))
         self.ratio = self.choice(cfg.get("ratio"), [r for _, r in RATIOS], "4:5")
-        self.size_var = tk.StringVar(value=self.choice(cfg.get("size"), SIZE_LABELS, DEFAULT_SIZE))
+        self.size_var = tk.StringVar(value="原尺寸")        # no control any more: always the original resolution
         self.thick_var = tk.DoubleVar(value=self.num(cfg.get("thickness"), 0, 50, 10.0))
         self.footer_on = tk.BooleanVar(value=cfg.get("footer") is True)
         self.layout_var = tk.StringVar(value=self.choice(cfg.get("footer_layout"), LAYOUT_LABELS, "經典三欄"))
@@ -1446,7 +1941,6 @@ class App(_Base):
         self.corner_var = tk.DoubleVar(value=self.num(cfg.get("corner"), CORNER_MIN, CORNER_MAX, CORNER_DEFAULT))
         self.divider_var = tk.BooleanVar(value=cfg.get("footer_divider") is True)
         self.cdivider_var = tk.BooleanVar(value=cfg.get("footer_center_divider") is not False)   # centred layouts: "|"
-        self.overwrite_var = tk.BooleanVar(value=cfg.get("overwrite") is True)
         self.text_scale = tk.DoubleVar(value=self.num(cfg.get("text_scale"), 50, 200, 100))
         self.logo_scale = tk.DoubleVar(value=self.num(cfg.get("logo_scale"), 40, 250, 100))
         self.height_scale = tk.DoubleVar(value=self.num(cfg.get("height_scale"), 60, 250, 100))
@@ -1459,7 +1953,7 @@ class App(_Base):
         self.custom_text_var = tk.StringVar(value=self.clean_text(cfg.get("custom_text", "")))
         self.main_var = tk.BooleanVar(value=cfg.get("lens_main") is True)
         self.mirror_var = tk.BooleanVar(value=cfg.get("mirror") is True)
-        self.adv_open = cfg.get("advanced_open") is True
+        self.adv_open = False                       # 進階 always starts folded (the old saved state is ignored)
         items = cfg.get("exposure_items")
         items = [k for k in items if isinstance(k, str)] if isinstance(items, list) else list(ig_border.DEFAULT_EXPOSURE_ITEMS)
         if sorted(items) == sorted(k for _, k in EXPO_LABELS):   # the old default (all four) was never a deliberate choice
@@ -1519,8 +2013,10 @@ class App(_Base):
             self.preview_src = Image.new("RGB", (900, 600), (120, 130, 145))
         self.schedule_preview()
         unify_controls(self)
+        decorate_icons(self)
         self.after(2000, self.poll)
         self.after(400, self.check_saved_paths)
+        self.after(1200, self.prewarm_advanced)
 
     def effective_style(self):
         """The style that is on screen right now, in the editor's model (a built-in layout is converted)."""
@@ -1625,8 +2121,16 @@ class App(_Base):
         outer = ctk.CTkFrame(parent, corner_radius=14, fg_color=CARD, border_width=BORDER_W, border_color=INK)
         outer.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 10))
         outer.columnconfigure(0, weight=1)
-        ctk.CTkLabel(outer, text=title, text_color=MUTED, anchor="w",
-                     font=ctk.CTkFont(size=12, weight="bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(10, 4))
+        icon = ui_icon(CARD_ICONS.get(title, ""), size=16) if title in CARD_ICONS else None
+        head = ctk.CTkFrame(outer, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="w", padx=16, pady=(10, 4))
+        col = 0
+        if icon is not None:
+            icon_canvas(head, icon, CARD[0] if isinstance(CARD, (tuple, list)) else CARD).grid(
+                row=0, column=0, padx=(0, 6), pady=(2, 0))          # the title text sits ~1 pt low in its label
+            col = 1
+        ctk.CTkLabel(head, text=title, text_color=MUTED, anchor="w", font=ctk.CTkFont(size=12, weight="bold")
+                     ).grid(row=0, column=col)
         return outer
 
     def build_controls(self):
@@ -1659,14 +2163,14 @@ class App(_Base):
         pr = ctk.CTkFrame(c0, fg_color="transparent")
         pr.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 14))
         pr.columnconfigure(0, weight=1)
-        self.preset_menu = ctk.CTkOptionMenu(pr, values=self.preset_names(), variable=self.preset_var, height=32,
+        self.preset_menu = PaperOptionMenu(pr, values=self.preset_names(), variable=self.preset_var, height=32,
                                              corner_radius=10, fg_color=BTN, button_color=BTN_HOVER,
                                              button_hover_color=BTN_HOVER, text_color=("gray10", "gray95"),
                                              dropdown_text_color=("gray10", "gray95"), command=self.apply_preset)
         self.preset_menu.grid(row=0, column=0, sticky="ew")
         small = dict(height=32, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER, text_color=("gray10", "gray95"))
-        ctk.CTkButton(pr, text="儲存", width=52, command=self.save_preset, **small).grid(row=0, column=1, padx=(6, 0))
-        ctk.CTkButton(pr, text="刪除", width=52, command=self.delete_preset, **small).grid(row=0, column=2, padx=(6, 0))
+        IconButton(pr, text="儲存", width=52, command=self.save_preset, **small).grid(row=0, column=1, padx=(6, 0))
+        IconButton(pr, text="刪除", width=52, command=self.delete_preset, **small).grid(row=0, column=2, padx=(6, 0))
 
         # folders
         c1 = self.card(left, "來源與輸出", 2)
@@ -1675,7 +2179,7 @@ class App(_Base):
         sf.columnconfigure(0, weight=1)
         self.src_label = ctk.CTkLabel(sf, text="", anchor="w", height=34, corner_radius=10, fg_color=BTN)
         self.src_label.grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.src_choose = ctk.CTkButton(sf, text="選擇", image=select_icon(), compound="right", width=84, height=34,
+        self.src_choose = IconButton(sf, text="選擇", image=select_icon(), compound="right", width=84, height=34,
                                         corner_radius=10, fg_color=BTN,
                                         hover_color=BTN_HOVER, text_color=("gray10", "gray95"),
                                         command=lambda: self.show_pick_menu(self.src_choose))
@@ -1691,7 +2195,7 @@ class App(_Base):
         grid.grid(row=1, column=0, padx=10)
         self.ratio_btns = {}
         for i, (label, val) in enumerate(RATIOS):
-            b = ctk.CTkButton(grid, text=label, image=self.icons[val][0], compound="top", width=54, height=64,
+            b = IconButton(grid, text=label, image=self.icons[val][0], compound="top", width=54, height=64,
                               corner_radius=12, font=ctk.CTkFont(size=11), border_spacing=4,
                               command=lambda v=val: self.set_ratio(v))
             b.grid(row=i // 5, column=i % 5, padx=2, pady=3)
@@ -1741,18 +2245,18 @@ class App(_Base):
         for i in range(3):
             looks.columnconfigure(i, weight=1, uniform="looks")
         for i, name in enumerate(FOOTER_LOOKS):
-            ctk.CTkButton(looks, text=name, height=30, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER,
+            IconButton(looks, text=name, height=30, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER,
                           text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12),
                           command=lambda n=name: self.apply_look(n)
                           ).grid(row=i // 3, column=i % 3, sticky="ew", padx=2, pady=2)
         lrow = ctk.CTkFrame(c4, fg_color="transparent")
         lrow.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 10))
         lrow.columnconfigure(0, weight=1)
-        ctk.CTkOptionMenu(lrow, values=list(LAYOUT_LABELS), variable=self.layout_var, height=32, corner_radius=10,
+        PaperOptionMenu(lrow, values=list(LAYOUT_LABELS), variable=self.layout_var, height=32, corner_radius=10,
                           fg_color=BTN, button_color=BTN_HOVER, button_hover_color=BTN_HOVER,
                           text_color=("gray10", "gray95"), dropdown_text_color=("gray10", "gray95"),
                           command=self.on_footer_change).grid(row=0, column=0, sticky="ew")
-        ctk.CTkButton(lrow, text="編輯樣式…", width=88, height=32, corner_radius=10, fg_color=BTN,
+        IconButton(lrow, text="編輯樣式…", width=88, height=32, corner_radius=10, fg_color=BTN,
                       hover_color=BTN_HOVER, text_color=("gray10", "gray95"), command=self.open_style_editor
                       ).grid(row=0, column=1, padx=(6, 0))
         fg = ctk.CTkFrame(c4, fg_color="transparent")
@@ -1782,20 +2286,6 @@ class App(_Base):
                      text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=290, justify="left", anchor="w"
                      ).grid(row=8, column=0, sticky="w", padx=16, pady=(4, 12))
 
-        # output
-        c3 = self.card(left, "輸出長邊 (px)", 4)
-        ctk.CTkSegmentedButton(c3, values=list(SIZE_LABELS), variable=self.size_var, height=34,
-                               corner_radius=10, selected_color=SEL, selected_hover_color=SEL_HOVER,
-                               unselected_color=BTN, unselected_hover_color=BTN_HOVER,
-                               text_color=("gray10", "gray95"), command=lambda v: self.schedule_preview()
-                               ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
-        ctk.CTkCheckBox(c3, text="覆蓋已存在的輸出檔", variable=self.overwrite_var, checkbox_width=20,
-                        checkbox_height=20, fg_color=ACCENT, hover_color=ACCENT_HOVER
-                        ).grid(row=2, column=0, sticky="w", padx=16, pady=(0, 4))
-        ctk.CTkLabel(c3, text="輸出檔已存在時會跳出視窗，讓你選擇覆蓋或取消。勾選這裡則預設覆蓋（仍會先確認）。",
-                     text_color=MUTED, font=ctk.CTkFont(size=11), wraplength=290, justify="left", anchor="w"
-                     ).grid(row=3, column=0, sticky="w", padx=16, pady=(0, 14))
-
         # footer details: the everyday controls stay visible, the rest folds away under 進階
         c6 = self.card(left, "資訊列細節", 6)
         self.slider_row(c6, 1, "文字大小", self.text_scale, 50, 200)
@@ -1809,10 +2299,10 @@ class App(_Base):
             return f
 
         r = line(3, "日期格式", (4, 0))
-        self.datefmt_menu = ctk.CTkOptionMenu(r, values=list(DATE_LABELS), variable=self.datefmt_var,
+        self.datefmt_menu = PaperOptionMenu(r, values=list(DATE_LABELS), variable=self.datefmt_var,
                                               command=lambda v: self.schedule_preview(), **menu)
         self.datefmt_menu.grid(row=0, column=1, sticky="ew")
-        self.adv_btn = ctk.CTkButton(c6, text="", image=chevron("right"), compound="left", height=28,
+        self.adv_btn = IconButton(c6, text="", image=chevron("right"), compound="left", height=28,
                                      corner_radius=8, fg_color="transparent", border_width=0, hover_color=BTN,
                                      text_color=("gray10", "gray95"), anchor="w", font=ctk.CTkFont(size=13),
                                      command=self.toggle_advanced)
@@ -1822,22 +2312,22 @@ class App(_Base):
         adv.columnconfigure(0, weight=1)
         self.slider_row(adv, 0, "資訊列高度", self.height_scale, 60, 250, padx=ADV_PADX)
         fr = line(1, "字體", (4, 0), adv)
-        self.font_menu = ctk.CTkOptionMenu(fr, values=list(self.font_labels), variable=self.font_var,
+        self.font_menu = PaperOptionMenu(fr, values=list(self.font_labels), variable=self.font_var,
                                            command=lambda v: self.schedule_preview(), **menu)
         self.font_menu.grid(row=0, column=1, sticky="ew")
-        ctk.CTkButton(fr, text="↻", width=30, height=30, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER,
+        IconButton(fr, text="↻", width=30, height=30, corner_radius=10, fg_color=BTN, hover_color=BTN_HOVER,
                       text_color=("gray10", "gray95"), command=self.refresh_fonts).grid(row=0, column=2, padx=(6, 0))
         cr = line(2, "文字顏色", parent=adv)
-        ctk.CTkOptionMenu(cr, values=COLOR_LABELS, variable=self.color_var, command=self.on_color, width=96, **menu
+        PaperOptionMenu(cr, values=COLOR_LABELS, variable=self.color_var, command=self.on_color, width=96, **menu
                           ).grid(row=0, column=1, sticky="w")
         ctk.CTkSwitch(cr, text="粗體", variable=self.bold_var, progress_color=ACCENT, width=60,
                       command=self.schedule_preview).grid(row=0, column=2, sticky="e")
         r = line(3, "logo 位置", parent=adv)
-        self.logopos_menu = ctk.CTkOptionMenu(r, values=list(LOGO_POS_LABELS), variable=self.logopos_var,
+        self.logopos_menu = PaperOptionMenu(r, values=list(LOGO_POS_LABELS), variable=self.logopos_var,
                                               command=lambda v: self.schedule_preview(), **menu)
         self.logopos_menu.grid(row=0, column=1, sticky="ew")
         orow = line(4, "排列順序", parent=adv)
-        self.exporder_menu = ctk.CTkOptionMenu(orow, values=list(EXPO_ORDER_LABELS), variable=self.exporder_var,
+        self.exporder_menu = PaperOptionMenu(orow, values=list(EXPO_ORDER_LABELS), variable=self.exporder_var,
                                                command=lambda v: self.schedule_preview(), **menu)
         self.exporder_menu.grid(row=0, column=1, sticky="ew")
         sw = ctk.CTkFrame(adv, fg_color="transparent")
@@ -1865,7 +2355,7 @@ class App(_Base):
         self.dot.grid(row=0, column=0)
         self.status = ctk.CTkLabel(st, text="待機中", text_color=MUTED, anchor="w")
         self.status.grid(row=0, column=1, padx=(2, 0), sticky="w")
-        ctk.CTkButton(st, text="開啟輸出資料夾", width=100, height=24, corner_radius=12, fg_color="transparent",
+        IconButton(st, text="開啟輸出資料夾", width=100, height=24, corner_radius=12, fg_color="transparent",
                       border_width=0,
                       hover_color=BTN_HOVER, text_color=MUTED, font=ctk.CTkFont(size=12),
                       command=self.open_output).grid(row=0, column=2, sticky="e")
@@ -1889,7 +2379,7 @@ class App(_Base):
         var.trace_add("write", lambda *a: ent.after(20, show_end))
         ent.after(300, show_end)
         ent.bind("<FocusOut>", lambda e: ent.after(20, show_end), add="+")
-        btn = ctk.CTkButton(f, text="選擇", image=select_icon(), compound="right", width=84, height=34,
+        btn = IconButton(f, text="選擇", image=select_icon(), compound="right", width=84, height=34,
                             corner_radius=10, fg_color=BTN,
                             hover_color=BTN_HOVER, text_color=("gray10", "gray95"))
         btn.configure(command=lambda: self.show_source_menu(var, which, btn, cmd))
@@ -2007,7 +2497,7 @@ class App(_Base):
         self.hq_bar = ctk.CTkProgressBar(hq, mode="indeterminate", width=60, height=5, progress_color=ACCENT)
         self.hq_bar.grid(row=0, column=1, padx=(8, 0))
         self.hq_bar.grid_remove()
-        cmp_btn = ctk.CTkButton(bar, text="按住對照原圖", width=96, height=28, corner_radius=14, fg_color=BTN,
+        cmp_btn = IconButton(bar, text="按住對照原圖", width=96, height=28, corner_radius=14, fg_color=BTN,
                                 hover_color=BTN_HOVER, text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12))
         cmp_btn.grid(row=0, column=1, sticky="w", padx=(4, 0))      # right after the fixed status box: never moves
         cmp_btn.bind("<ButtonPress-1>", lambda e: self.set_compare(True), add="+")
@@ -2016,19 +2506,19 @@ class App(_Base):
         zc.grid(row=0, column=2, sticky="e")
         small = dict(height=28, corner_radius=14, fg_color=BTN, hover_color=BTN_HOVER,
                      text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12))
-        ctk.CTkButton(zc, text="－", width=30, command=lambda: self.zoom_step(1 / 1.25), **small
+        IconButton(zc, text="－", width=30, command=lambda: self.zoom_step(1 / 1.25), **small
                       ).grid(row=0, column=0)
         self.zoom_slider = ctk.CTkSlider(zc, from_=0, to=1, width=80, height=16, button_color=ACCENT,
                                          button_hover_color=ACCENT_HOVER, progress_color=ACCENT,
                                          command=self.on_zoom_slider)
         self.zoom_slider.set(0)
         self.zoom_slider.grid(row=0, column=1, padx=6)
-        ctk.CTkButton(zc, text="＋", width=30, command=lambda: self.zoom_step(1.25), **small).grid(row=0, column=2)
+        IconButton(zc, text="＋", width=30, command=lambda: self.zoom_step(1.25), **small).grid(row=0, column=2)
         self.zoom_pct = ctk.CTkLabel(zc, text="", width=46, font=ctk.CTkFont(size=12))
         self.zoom_pct.grid(row=0, column=3, padx=(6, 2))
-        ctk.CTkButton(zc, text="100%", width=48, command=lambda: self.zoom_to(1.0), **small
+        IconButton(zc, text="100%", width=48, command=lambda: self.zoom_to(1.0), **small
                       ).grid(row=0, column=4, padx=2)
-        ctk.CTkButton(zc, text="適合視窗", width=72, command=self.reset_view, **small).grid(row=0, column=5, padx=(2, 0))
+        IconButton(zc, text="適合視窗", width=72, command=self.reset_view, **small).grid(row=0, column=5, padx=(2, 0))
         ctk.CTkLabel(pv, text="雙指滑動：平移　⌘＋滑動：縮放　雙擊：100% / 適合視窗　按住 \\ ：對照原圖",
                      text_color=MUTED, font=ctk.CTkFont(size=11)).grid(row=2, column=0, pady=(0, 8))
 
@@ -2050,11 +2540,11 @@ class App(_Base):
         self.count_lbl.grid(row=0, column=0, sticky="w")
         small = dict(height=26, corner_radius=13, fg_color=BTN, hover_color=BTN_HOVER,
                      text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12))
-        self.sel_btn = ctk.CTkButton(head, text="全選", width=78, command=self.toggle_all, **small)   # 全選 <-> 取消全選
+        self.sel_btn = IconButton(head, text="全選", width=78, command=self.toggle_all, **small)   # 全選 <-> 取消全選
         self.sel_btn.grid(row=0, column=1, padx=(6, 0))
-        ctk.CTkButton(head, text="重設", width=64, command=self.reset_selection, **small
+        IconButton(head, text="重設", width=64, command=self.reset_selection, **small
                       ).grid(row=0, column=2, padx=(6, 0))
-        self.run_btn = ctk.CTkButton(head, text=self.run_label(), width=150, height=36, corner_radius=18,
+        self.run_btn = IconButton(head, text=self.run_label(), width=150, height=36, corner_radius=18,
                                      font=ctk.CTkFont(size=15, weight="bold"), fg_color=ACCENT,
                                      hover_color=ACCENT_HOVER, text_color="white", command=self.process_selected)
         self.run_btn.grid(row=0, column=3, padx=(14, 0))
@@ -2093,7 +2583,6 @@ class App(_Base):
                 "corner": round(self.corner_var.get()),
                 "footer_divider": bool(self.divider_var.get()),
                 "footer_center_divider": bool(self.cdivider_var.get()),
-                "overwrite": bool(self.overwrite_var.get()),
                 "footer_fields": [k for k, v in self.field_vars.items() if v.get()],
                 "text_scale": round(self.text_scale.get()), "logo_scale": round(self.logo_scale.get()),
                 "height_scale": round(self.height_scale.get()), "bold": bool(self.bold_var.get()),
@@ -2102,7 +2591,7 @@ class App(_Base):
                 "logo_pos": LOGO_POS_LABELS.get(self.logopos_var.get(), "left"),
                 "custom_text": self.clean_text(self.custom_text_var.get()),
                 "lens_main": bool(self.main_var.get()), "mirror": bool(self.mirror_var.get()),
-                "advanced_open": bool(self.adv_open), "thumb_h": self.thumb_h,
+                "thumb_h": self.thumb_h,
                 "exposure_items": [k for k, v in self.exp_vars.items() if v.get()],
                 "exposure_order": EXPO_ORDER_LABELS.get(self.exporder_var.get(), "std"),
                 "font": self.font_labels.get(self.font_var.get(), "auto"),
@@ -2328,6 +2817,18 @@ class App(_Base):
         """The style code the renderer takes, from the background choice and the rounded-corners switch."""
         bg = BG_LABELS.get(self.style_var.get(), "white")
         return FRAME_STYLE[(bg, bool(self.round_var.get()))]
+
+    def prewarm_advanced(self):
+        """The first time the folded 進階 section is shown, Tk draws its ~70 widgets (~0.3 s). Draw them once
+        now, off to the side where the card clips them, so opening it later only has to lay them out."""
+        try:
+            if self.adv_open or self.adv_frame.winfo_manager():
+                return
+            tk.Place.place_configure(self.adv_frame, x=-4000, y=0, width=300)   # (CTk's own place() refuses width)
+            self.update_idletasks()
+            self.adv_frame.place_forget()
+        except tk.TclError:
+            pass
 
     def toggle_advanced(self):
         self.adv_open = not self.adv_open
@@ -2562,12 +3063,13 @@ class App(_Base):
         for key in keys:
             label = "已匯入的照片（%d 張）" % len(self.imported) if key == "imported" else self.source_menu_label(key)
             mark = "✓ " if key == self.active_source else "    "
-            menu.add_command(label=mark + label, command=lambda k=key: self.set_active(k))
+            menu.add_command(label=mark + label, command=lambda k=key: self.set_active(k),
+                             **icon_kw("image_in" if key == "imported" else ("source" if key == "all" else "folder")))
         menu.add_separator()
-        menu.add_command(label="加入資料夾…", command=self.pick_folder)
-        menu.add_command(label="匯入照片…", command=self.import_dialog)
+        menu.add_command(label="加入資料夾…", command=self.pick_folder, **icon_kw("folder_add"))
+        menu.add_command(label="匯入照片…", command=self.import_dialog, **icon_kw("image_in"))
         menu.add_separator()
-        menu.add_command(label="管理來源…", command=self.open_source_manager)
+        menu.add_command(label="管理來源…", command=self.open_source_manager, **icon_kw("gear"))
         self.popup(menu, widget)
 
     def source_label_parts(self):
@@ -2932,7 +3434,9 @@ class App(_Base):
     def update_count(self):
         if self.batch is None or not self.batch.is_alive():
             self.run_btn.configure(text=self.run_label())
-        self.sel_btn.configure(text="取消全選" if self.all_ticked() else "全選")
+        everything = self.all_ticked()
+        self.sel_btn.configure(text="取消全選" if everything else "全選",
+                               image=ui_icon("select_none" if everything else "select_all"))
         n = len(self.photos)
         name = self.source_label(self.active_source)
         if n == 0:
@@ -3402,8 +3906,6 @@ class App(_Base):
         if "corner" in d:
             self.corner_var.set(self.num(d["corner"], CORNER_MIN, CORNER_MAX, CORNER_DEFAULT))
         self.on_round_toggle(preview=False)
-        if self.choice(d.get("size"), SIZE_LABELS, None):
-            self.size_var.set(d["size"])
         if "footer" in d:
             self.footer_on.set(d["footer"] is True)
         if self.choice(d.get("layout"), LAYOUT_LABELS.values(), None):
@@ -3633,7 +4135,7 @@ class App(_Base):
             out = Path(self.out_var.get().strip()).expanduser().resolve()
             opts = Namespace(ratio=self.ratio, thickness=round(float(self.thick_var.get()), 1),
                              max_edge=SIZE_LABELS[self.size_var.get()], quality=95,
-                             overwrite=bool(self.overwrite_var.get()),
+                             overwrite=False,          # decided per run by the 輸出已存在 dialog
                              style=self.frame_style(), corner=self.corner_frac(), **self.footer_opts())
         except (ValueError, KeyError, tk.TclError, OSError):
             messagebox.showerror("錯誤", "請檢查資料夾與設定")
@@ -3720,7 +4222,7 @@ class App(_Base):
         names = {p: self.out_name(p) for p in paths}
         self.batch = threading.Thread(target=self.batch_worker, args=(paths, out, opts, names), daemon=True)
         self.batch.start()
-        self.run_btn.configure(text="停止匯出", fg_color=RED, hover_color=RED_HOVER)
+        self.run_btn.configure(text="停止匯出", fg_color=RED, hover_color=RED_HOVER, image=ui_icon("stop", white=True))
         self.progress.set(0)
         self.progress.grid()
         self.set_status("匯出中 0 / %d" % len(paths), ACCENT)
@@ -3737,7 +4239,8 @@ class App(_Base):
 
     def on_batch_done(self, done, skip, fail, stopped):
         self.scan_sources()
-        self.run_btn.configure(text=self.run_label(), fg_color=ACCENT, hover_color=ACCENT_HOVER)
+        self.run_btn.configure(text=self.run_label(), fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                               image=ui_icon("export", white=True))
         self.progress.grid_remove()
         text = "%s：完成 %d 張" % ("已停止" if stopped else "匯出結束", done)
         if skip:
