@@ -23,10 +23,33 @@
 
 1. 從 [Releases](../../releases) 下載 `PhotoLab-<版本>-macOS.zip`，解壓縮後把 `PhotoLab.app` 放進「應用程式」。
 2. App 沒有經過 Apple 公證：第一次請在檔案上按右鍵 → **打開**（或到「系統設定 → 隱私權與安全性」按「仍要打開」）。
-3. **品牌 logo 與字體不內含**（商標與授權）。把你自己的 logo PNG 放到
-   `~/Library/Application Support/Photo_Lab/logos/`，檔名用小寫品牌名，例如 `canon.png`、`sony.png`、
-   `nikon.png`、`fujifilm.png`；透明背景、深色 logo 最合適。沒有檔案的品牌會顯示成純文字。
-   字體可放到 `~/Library/Application Support/Photo_Lab/fonts/`（`.ttf`／`.otf`／`.ttc`）。
+3. **品牌 logo 與字體不內含**（商標與授權），請自備，見下一節。
+
+## 自備品牌 logo 與字體
+
+1. 建立並打開資料夾（終端機貼上這兩行，或在 Finder 按 ⌘⇧G 貼上路徑）：
+
+   ```sh
+   mkdir -p ~/Library/Application\ Support/Photo_Lab/logos
+   open ~/Library/Application\ Support/Photo_Lab/logos
+   ```
+
+2. 把 logo 的 PNG 放進去，**檔名用小寫品牌名（只留英文字母與數字）**：
+
+   | 相機品牌 | 檔名 |
+   |---|---|
+   | Canon / Sony / Nikon | `canon.png` / `sony.png` / `nikon.png` |
+   | Fujifilm / Panasonic / Leica | `fujifilm.png` / `panasonic.png` / `leica.png` |
+   | OM System | `omsystem.png` |
+   | Olympus、Ricoh、Pentax、Sigma、Hasselblad、DJI、Apple、GoPro… | 同樣小寫，例如 `olympus.png` |
+
+3. 檔案要求：**PNG**、背景透明、深色 logo（預設是白邊）、單檔 5 MB 以下。
+   用「模糊背景」（深色底）時，可另外放淺色版 `品牌名_dark.png`（例如 `sony_dark.png`），深色背景會優先用它。
+4. App 內也有說明：選單列「說明 → 自備品牌 logo 與字體…」會列出路徑與規則，並可一鍵打開（必要時建立）資料夾。
+5. 切換一下樣式或重新開啟 App，頁尾就會出現 logo。沒有檔案的品牌會顯示成純文字，不會出錯。
+
+字體：放到 `~/Library/Application Support/Photo_Lab/fonts/`（`.ttf`／`.otf`／`.ttc`），
+之後在 App 的「進階 → 字體」裡選用。請只使用你有權使用的字體。
 
 設定與縮圖快取存放位置：`~/Library/Application Support/Photo_Lab/settings.json`、`~/Library/Caches/Photo_Lab/`。
 刪掉它們就是全新狀態。
