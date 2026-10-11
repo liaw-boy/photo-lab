@@ -486,7 +486,7 @@ def _row(segs, gap, divider, color=(0, 0, 0)):
     x = 0
     for kind, p in parts:
         if kind == "img":
-            row.alpha_composite(p, (x, (h - p.height) // 2))
+            row.alpha_composite(p, (x, h - p.height))          # bottom edges on one line
             x += p.width + gap
         else:
             ImageDraw.Draw(row).line([(x, h * 0.1), (x, h * 0.9)], fill=tuple(color) + (110,),
@@ -565,12 +565,18 @@ def render_footer(footer, base_band, theme=THEME_DARK_TEXT):
         has_model = "camera" in fields and model
         has_lens = "lens" in fields and info.get("lens")
         model_img = lens_img = None
+        # the logo stands right beside the model name (same line), unless it belongs to another block
+        attach = logo is not None and ((pos == "left" and not mirror) or (mirror and not divider))
+
+        def with_logo(m):
+            return _row([logo, m], round(gap * 0.5), False) if attach else m
+        outer_logo = None if attach else logo
         if lens_main:                                   # lens bold on top, camera body in the secondary tone
             lens_img = T(info["lens"], fs, strong, bold) if has_lens else None
-            model_img = T(model, round(fs * 0.95), weak) if has_model else None
+            model_img = with_logo(T(model, round(fs * 0.95), weak) if has_model else None)
             name_lines = [lens_img, model_img]
         else:                                           # camera bold on top, lens in the secondary tone
-            model_img = T(model, fs, strong, bold) if has_model else None
+            model_img = with_logo(T(model, fs, strong, bold) if has_model else None)
             lens_img = T(info["lens"], round(fs * 0.95), weak) if has_lens else None
             name_lines = [model_img, lens_img]
         exp_img = T(exp_txt, fs, strong, bold) if "exposure" in fields and exp_txt else None
@@ -583,7 +589,7 @@ def render_footer(footer, base_band, theme=THEME_DARK_TEXT):
         center = None
         if mirror:                                      # parameters on the left, logo | camera block on the right
             left = params_l
-            right = _row([logo, names_l], round(gap * 0.7), divider, weak)
+            right = _row([outer_logo, names_l], round(gap * 0.7), divider, weak)
         elif pos == "right":                            # logo just before the right-hand block
             left = names_l
             right = _row([logo, params_r], round(gap * 0.7), divider, weak)
@@ -591,7 +597,7 @@ def render_footer(footer, base_band, theme=THEME_DARK_TEXT):
         elif pos == "center":
             left, right, center = names_l, params_r, logo
         else:                                           # "left" (default): logo beside the name block
-            left = _row([logo, names_l], round(gap * 0.7), False)
+            left = _row([outer_logo, names_l], round(gap * 0.7), False)
             right = params_r
         if divider and not mirror and right is not None:   # thin line just left of the right-hand block
             right = _row([Image.new("RGBA", (1, right.height), (0, 0, 0, 0)), right], round(gap * 0.6), True, weak)
@@ -627,7 +633,8 @@ def render_footer(footer, base_band, theme=THEME_DARK_TEXT):
         def build_block(name):
             blk = style[name]
             stack = _stack([style_line(ln) for ln in blk["lines"]], round(fs * 0.5), blk["align"])
-            if blk.get("logo") == "left":                       # the brand logo beside the block's lines
+            has_logo_item = any("logo" in ln["items"] for ln in blk["lines"])   # an own logo element wins
+            if blk.get("logo") == "left" and not has_logo_item:   # the brand logo beside the block's lines
                 lg = logo_img()
                 if lg is not None:
                     return _row([lg, stack], round(gap * 0.7), bool(blk.get("logo_rule")), weak)
@@ -691,10 +698,13 @@ def layout_to_style(layout, o=None):
     def block(align, ls, logo="none", rule=False):
         return {"align": align, "lines": ls, "logo": logo, "logo_rule": bool(rule)}
 
+    # the logo stands beside the model name (same line) where it belongs to the name block
+    attach = cam and layout == "classic3" and ((pos == "left" and not mirror) or (mirror and not divider))
+    model_items = (["logo", "model_auto"] if attach else ["model_auto"]) if cam else []
     if o.get("main") == "lens":
-        names = lines(line(["lens"] if lens else [], True), line(["model_auto"] if cam else [], False, 95, "weak"))
+        names = lines(line(["lens"] if lens else [], True), line(model_items, False, 95, "weak"))
     else:
-        names = lines(line(["model_auto"] if cam else [], True), line(["lens"] if lens else [], False, 95, "weak"))
+        names = lines(line(model_items, True), line(["lens"] if lens else [], False, 95, "weak"))
     params = lines(line(["exposure"] if expo else [], True),
                    line((["date"] if date else []) + ["custom"], False, 95, "weak"))
     empty = block("center", [])
@@ -711,8 +721,8 @@ def layout_to_style(layout, o=None):
                 line(["custom"], False, 95, "weak"))), "right": block("right", []), "divider": False}
     if mirror and layout == "classic3":                       # parameters left, logo | camera right
         return {"left": block("left", params), "center": empty,
-                "right": block("left", names, "left" if cam else "none", divider), "divider": False}
-    return {"left": block("left", names, "left" if (pos == "left" and cam) else "none"),
+                "right": block("left", names, "left" if (cam and not attach) else "none", divider), "divider": False}
+    return {"left": block("left", names, "left" if (pos == "left" and cam and not attach) else "none"),
             "center": block("center", lines(line(["logo"])) if (pos == "center" and cam) else []),
             "right": block("right", params, "left" if (pos == "right" and cam) else "none",
                            divider if pos == "right" else False),

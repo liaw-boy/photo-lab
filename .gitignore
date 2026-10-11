@@ -13,3 +13,7 @@ fonts/*.ttc
 # design references exported from Figma community kits (not part of the project)
 Paper Wireframe Kit*.zip
 design_ref/
+
+# Swift package build output
+swift/**/.build/
+*.xcodeproj/xcuserdata/

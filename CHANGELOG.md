@@ -3,6 +3,31 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 1.0.0 — 2026-10-11
+First stable release, and the first one with the native macOS app (`swift/PhotoLab`, Swift / SwiftUI, no Python
+needed). The Python app (`python/`) stays as the cross-platform edition and as the reference renderer.
+- **Native Swift app**: the same borders, footers and presets as the Python app, an own JPEG encoder (4:4:4, ICC
+  profile kept), thumbnail cache, pinch / double-tap zoom, resizable thumbnail strip. `swift/PhotoLab/package.sh`
+  builds `dist/PhotoLab.app` and a zip (ad-hoc signed). Your own `logos/` and `fonts/` files are packed into that
+  local build (they are never in git - do not hand such a zip to others); without them the app reads
+  `~/Library/Application Support/Photo_Lab/{logos,fonts}`. A packaged app does not look at `PHOTOLAB_ROOT` or parent
+  folders.
+- Both renderers match (`tools/compare_swift.py`: mean difference 0.06-1.6 of 255 over the border and ten footer cases).
+- **Footer: logo beside the model name** (経典 layout, logo on the left): `[logo] EOS 90D` on the first line, the
+  lens below. Logo and text in one row are aligned on their bottom edges instead of their centres.
+- **Style editor (Swift)**: drag the elements (品牌 logo / 機型 / 鏡頭 / 焦距 / 拍攝參數 / 日期 / 自訂文字) into the
+  three blocks; drag a placed element to move it (an insertion bar shows where it lands, also after the last one),
+  drag it back to the tray to remove it; drag a block by its title to swap two blocks; the block being edited is
+  drawn wider. The editing rules are unit tested (`swift test`).
+- 焦距 is its own element, 曝光參數 is now called 拍攝參數 (aperture, shutter, ISO only); older custom styles get a
+  焦距 element in front of each 拍攝參數 once, so they look the same as before.
+- A logo element inside a block replaces the old "logo left of the whole block" flag (no double logo).
+- Main window: 機型 / 鏡頭 / 焦距 / 參數 / 日期 checks, one-click looks with the active one shown solid black,
+  macOS-style segmented control with a sliding thumb; the options that the style editor covers (版面 menu, 粗體,
+  logo 位置, 鏡頭放上面, 左右對調, 加分隔線) were removed from the main window.
+- 鏡頭主角 look is now "logo 機型": logo + model on top, shooting values and date below with a thin divider.
+- 拍攝參數 order: eight arrangements instead of two.
+
 ## 0.6.1 — 2026-10-11
 - Ratio tiles are drawn as vectors like the other icons (sharp on Retina).
 - Removed the 按住對照原圖 button and the `\` hold-to-compare shortcut.
