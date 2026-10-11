@@ -1,9 +1,17 @@
 #!/bin/sh
-# Builds the release app and packs it as dist/PhotoLab.app + dist/PhotoLab-<version>-macOS.zip.
+# Builds the release app and packs it as dist/PhotoLab.app + a zip.
+#   ./package.sh              clean build  -> dist/PhotoLab-<version>-macOS.zip  (the one to publish)
+#   ./package.sh --with-logos personal build with your own logos/ and fonts/ packed in
+#                             -> dist/PhotoLab-<version>-macOS-with-logos.zip  (do not hand it to others)
 # The app is signed ad hoc (no developer account needed); on another Mac the first start needs right-click > Open.
-# Brand logos and fonts are never bundled (trademarks / licences): the app reads them from
-# ~/Library/Application Support/Photo_Lab/{logos,fonts}.
+# A clean build reads logos / fonts from ~/Library/Application Support/Photo_Lab/{logos,fonts}.
 set -eu
+WITH_LOGOS=0
+case "${1:-}" in
+  "") ;;
+  --with-logos) WITH_LOGOS=1 ;;
+  *) echo "usage: $0 [--with-logos]" >&2; exit 2 ;;
+esac
 cd "$(dirname "$0")"
 ROOT="$(cd ../.. && pwd)"
 VERSION="$(tr -d ' \n' < "$ROOT/VERSION")"
@@ -22,14 +30,16 @@ cp "$ROOT/assets/PhotoLab.icns" "$APP/Contents/Resources/PhotoLab.icns"
 cp "$ROOT/assets/icon_1024.png" "$APP/Contents/Resources/icon_1024.png"
 cp "$ROOT/VERSION" "$APP/Contents/Resources/VERSION"
 
-# Your own brand logos / fonts (they are not in git) are packed into this local build so the logos show up.
-# Do not hand such a zip to other people: the logos are trademarks and the fonts have their own licences.
-mkdir -p "$APP/Contents/Resources/logos" "$APP/Contents/Resources/fonts"
-for f in "$ROOT"/logos/*.png; do [ -f "$f" ] && cp "$f" "$APP/Contents/Resources/logos/"; done
-for f in "$ROOT"/fonts/*.ttf "$ROOT"/fonts/*.otf "$ROOT"/fonts/*.ttc; do
-  [ -f "$f" ] && cp "$f" "$APP/Contents/Resources/fonts/"
-done
-echo "logos packed: $(ls "$APP/Contents/Resources/logos" | wc -l | tr -d ' ')"
+if [ "$WITH_LOGOS" = 1 ]; then
+  # Your own brand logos / fonts (they are not in git). Trademarks and font licences: keep such a zip to yourself.
+  mkdir -p "$APP/Contents/Resources/logos" "$APP/Contents/Resources/fonts"
+  for f in "$ROOT"/logos/*.png; do [ -f "$f" ] && cp "$f" "$APP/Contents/Resources/logos/"; done
+  for f in "$ROOT"/fonts/*.ttf "$ROOT"/fonts/*.otf "$ROOT"/fonts/*.ttc; do
+    [ -f "$f" ] && cp "$f" "$APP/Contents/Resources/fonts/"
+  done
+fi
+xattr -cr "$APP"      # no download origin / quarantine / other extended attributes of the source files
+echo "logos packed: $(ls "$APP/Contents/Resources/logos" 2>/dev/null | wc -l | tr -d ' ')"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,9 +65,10 @@ PLIST
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
-ZIP="$DIST/PhotoLab-$VERSION-macOS.zip"
+SUFFIX=""; [ "$WITH_LOGOS" = 1 ] && SUFFIX="-with-logos"
+ZIP="$DIST/PhotoLab-$VERSION-macOS$SUFFIX.zip"
 rm -f "$ZIP"
-ditto -c -k --keepParent "$APP" "$ZIP"
+ditto -c -k --norsrc --noextattr --keepParent "$APP" "$ZIP"
 shasum -a 256 "$ZIP"
 echo "built: $APP"
 echo "zip:   $ZIP"

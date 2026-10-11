@@ -8,10 +8,9 @@ First stable release, and the first one with the native macOS app (`swift/PhotoL
 needed). The Python app (`python/`) stays as the cross-platform edition and as the reference renderer.
 - **Native Swift app**: the same borders, footers and presets as the Python app, an own JPEG encoder (4:4:4, ICC
   profile kept), thumbnail cache, pinch / double-tap zoom, resizable thumbnail strip. `swift/PhotoLab/package.sh`
-  builds `dist/PhotoLab.app` and a zip (ad-hoc signed). Your own `logos/` and `fonts/` files are packed into that
-  local build (they are never in git - do not hand such a zip to others); without them the app reads
-  `~/Library/Application Support/Photo_Lab/{logos,fonts}`. A packaged app does not look at `PHOTOLAB_ROOT` or parent
-  folders.
+  builds `dist/PhotoLab.app` and a zip (ad-hoc signed): clean by default, `--with-logos` packs your own `logos/` and
+  `fonts/` (never in git) into a personal build that should not be passed on. A packaged app reads
+  `~/Library/Application Support/Photo_Lab/{logos,fonts}` and does not look at `PHOTOLAB_ROOT` or parent folders.
 - Both renderers match (`tools/compare_swift.py`: mean difference 0.06-1.6 of 255 over the border and ten footer cases).
 - **Footer: logo beside the model name** (経典 layout, logo on the left): `[logo] EOS 90D` on the first line, the
   lens below. Logo and text in one row are aligned on their bottom edges instead of their centres.
