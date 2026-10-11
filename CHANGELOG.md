@@ -3,6 +3,10 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 0.6.1 — 2026-10-11
+- Ratio tiles are drawn as vectors like the other icons (sharp on Retina).
+- Removed the 按住對照原圖 button and the `\` hold-to-compare shortcut.
+
 ## 0.6.0 — 2026-10-11
 - **Style editor in the Stitch layout**: the three blocks side by side, every line shows its own 粗體 / 大小 /
   字色 / 加線 and its items as chips with ✕ ("＋ 加入" for more; click a chip to get ◀ ▶ re-order arrows); the

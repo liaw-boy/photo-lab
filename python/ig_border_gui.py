@@ -341,21 +341,77 @@ _SPACERS = {}
 class VIcon:
     """A line icon (Lucide, see tools/make_icons.py) drawn as vectors on a tk.Canvas, so it is sharp on Retina where
     a Tk image (1 px = 1 pt, then up-scaled) never is."""
-    __slots__ = ("name", "white", "size")
+    __slots__ = ("name", "white", "size", "slot")
 
-    def __init__(self, name, white=False, size=16):
-        self.name, self.white, self.size = name, white, size
+    def __init__(self, name, white=False, size=16, slot=None):
+        """slot: width of the room the icon reserves in a button (default: its size). A glyph with empty margins
+        (the narrow up/down chevrons) reserves less, so its ink - not its box - is what gets centred."""
+        self.name, self.white, self.size, self.slot = name, white, size, slot or size
 
 
-def icon_spacer(size):
+def icon_spacer(size, width=None):
     """Transparent image that reserves the room of an icon inside a CTkButton."""
-    if size not in _SPACERS:
-        _SPACERS[size] = ctk.CTkImage(Image.new("RGBA", (size, size), (0, 0, 0, 0)), size=(size, size))
-    return _SPACERS[size]
+    key = (size, width or size)
+    if key not in _SPACERS:
+        _SPACERS[key] = ctk.CTkImage(Image.new("RGBA", (key[1], size), (0, 0, 0, 0)), size=(key[1], size))
+    return _SPACERS[key]
+
+
+def _round_stroke(cv, x0, y0, x1, y1, r, width, color):
+    """Outline of a rounded rectangle from straight lines and arcs (Tk anti-aliases strokes, not polygon fills)."""
+    for (ax, ay, bx, by) in ((x0 + r, y0, x1 - r, y0), (x1, y0 + r, x1, y1 - r),
+                             (x0 + r, y1, x1 - r, y1), (x0, y0 + r, x0, y1 - r)):
+        cv.create_line(ax, ay, bx, by, width=width, fill=color, capstyle="projecting")   # overlaps the arcs
+    d = 2 * r
+    for ax, ay, start in ((x1 - d, y0, 0), (x1 - d, y1 - d, 270), (x0, y1 - d, 180), (x0, y0, 90)):
+        cv.create_arc(ax, ay, ax + d, ay + d, start=start, extent=90, style="arc", width=width, outline=color)
+
+
+def _solid(cv, box, r, color, width=2.0):
+    """Filled rounded rectangle: a plain fill kept inside a stroked outline of the same colour."""
+    x0, y0, x1, y1 = box
+    h = width / 2
+    i = h + 0.4 * r                                   # reaches into the corners, stays inside the arcs
+    cv.create_rectangle(x0 + i, y0 + i, x1 - i, y1 - i, fill=color, outline="")
+    cv.create_rectangle(x0 + h, y0 + r, x1 - h, y1 - r, fill=color, outline="")
+    cv.create_rectangle(x0 + r, y0 + h, x1 - r, y1 - h, fill=color, outline="")
+    _round_stroke(cv, x0 + h, y0 + h, x1 - h, y1 - h, max(0.5, r - h), width, color)
+
+
+def draw_ratio(cv, val, size, color):
+    """Pictogram of a border ratio (outer frame = the canvas, filled block = the photo), same proportions as the
+    old raster tiles (drawn for a 56 px square)."""
+    k = size / 56.0
+    box = 48
+
+    def centered(w, h):
+        return ((56 - w) / 2 * k, (56 - h) / 2 * k, (56 + w) / 2 * k, (56 + h) / 2 * k)
+
+    if val == "original":
+        w, h = box, round(box * 2 / 3)
+        _solid(cv, centered(w, h), 4 * k, color)
+        return
+    if val == "even":
+        ow, oh = box, round(box * 0.74)
+    else:
+        rw, rh = ig_border.RATIOS[val]
+        s = box / max(rw, rh)
+        ow, oh = round(rw * s), round(rh * s)
+    x0, y0, x1, y1 = centered(ow, oh)
+    _round_stroke(cv, x0 + 1, y0 + 1, x1 - 1, y1 - 1, 6 * k, ICON_STROKE, color)
+    iw, ih = round(ow * 0.62), round(oh * 0.62)
+    if val == "even":
+        iw, ih = ow - 16, oh - 16
+    elif val in ("3:2", "16:9", "5:4"):
+        iw, ih = round(ow * 0.7), round(oh * 0.52)
+    _solid(cv, centered(max(iw, 6), max(ih, 6)), 3 * k, color)
 
 
 def draw_icon(cv, icon):
     cv.delete("all")
+    if icon.name.startswith("ratio:"):
+        draw_ratio(cv, icon.name[6:], icon.size, ICON_WHITE if icon.white else ICON_INK)
+        return
     k = icon.size / 24.0
     for poly in ICON_PATHS.get(icon.name, ()):
         cv.create_line([v * k for pt in poly for v in pt], width=ICON_STROKE, capstyle="round", joinstyle="round",
@@ -374,14 +430,14 @@ class IconButton(ctk.CTkButton):
     def __init__(self, *args, image=None, **kwargs):
         icon = image if isinstance(image, VIcon) else None
         self._vicon = None
-        super().__init__(*args, image=icon_spacer(icon.size) if icon else image, **kwargs)
+        super().__init__(*args, image=icon_spacer(icon.size, icon.slot) if icon else image, **kwargs)
         if icon:
             self._show_icon(icon)
 
     def configure(self, require_redraw=False, **kwargs):
         icon = kwargs.get("image")
         if isinstance(icon, VIcon):
-            kwargs["image"] = icon_spacer(icon.size)
+            kwargs["image"] = icon_spacer(icon.size, icon.slot)
         super().configure(require_redraw, **kwargs)
         if isinstance(icon, VIcon):
             self._show_icon(icon)
@@ -497,7 +553,7 @@ BUTTON_ICONS = {
     "取消全選": ("select_none", False), "重設": ("reset", False), "重設為預設": ("reset", False),
     "載入樣式檔…": ("load", False), "儲存樣式檔…": ("save", False), "完成": ("check", True),
     "加入資料夾…": ("folder_add", False), "匯入照片…": ("image_in", False), "移除勾選的": ("remove", False),
-    "清除失效項目": ("clean", False), "按住對照原圖": ("compare", False), "適合視窗": ("fit", False),
+    "清除失效項目": ("clean", False), "適合視窗": ("fit", False),
     "開啟輸出資料夾": ("folder", False), "↻": ("reset", False),
     "匯出": ("export", True), "停止匯出": ("stop", True), "取消": ("close", False), "覆蓋": ("check", True),
     "只匯出新的": ("add", False),
@@ -538,7 +594,7 @@ def decorate_icons(root):
 
 def select_icon():
     """Up/down chevrons of the 選擇 buttons."""
-    return VIcon("updown", size=12)
+    return VIcon("updown", size=12, slot=4)
 
 
 # ---- persistent thumbnail cache --------------------------------------------------------------------------------
@@ -667,35 +723,6 @@ def status_pill(base, state):
     out = base.convert("RGBA")
     out.alpha_composite(pill, (7, max(0, base.height - H - 7)))
     return out.convert("RGB")
-
-
-def ratio_icon(val, color, px=56):
-    """Small pictogram of a ratio: outer frame (the canvas) with a filled photo inside."""
-    img = Image.new("RGBA", (px, px), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    box = px - 8
-
-    def centered(w, h):
-        return ((px - w) // 2, (px - h) // 2, (px + w) // 2, (px + h) // 2)
-
-    if val == "original":
-        w, h = box, round(box * 2 / 3)
-        d.rounded_rectangle(centered(w, h), radius=3, fill=color)
-        return img
-    if val == "even":
-        ow, oh = box, round(box * 0.74)
-    else:
-        rw, rh = ig_border.RATIOS[val]
-        s = box / max(rw, rh)
-        ow, oh = round(rw * s), round(rh * s)
-    d.rounded_rectangle(centered(ow, oh), radius=4, outline=color, width=3)
-    iw, ih = round(ow * 0.62), round(oh * 0.62)
-    if val == "even":
-        iw, ih = ow - 16, oh - 16
-    elif val in ("3:2", "16:9", "5:4"):
-        iw, ih = round(ow * 0.7), round(oh * 0.52)
-    d.rounded_rectangle(centered(max(iw, 6), max(ih, 6)), radius=2, fill=color)
-    return img
 
 
 def place_over_app(win, app, w, h):
@@ -1979,7 +2006,6 @@ class App(_Base):
                 if name and name not in BUILTIN_PRESETS and isinstance(v, dict):
                     self.presets[name] = v
         self.preset_var = tk.StringVar(value=PRESET_PLACEHOLDER)
-        self.compare = False
         saved = cfg.get("footer_fields")
         saved = [k for k in saved if isinstance(k, str)] if isinstance(saved, list) else list(ig_border.FOOTER_FIELDS)
         self.field_vars = {k: tk.BooleanVar(value=k in saved) for _, k in FIELD_LABELS}
@@ -1987,10 +2013,7 @@ class App(_Base):
 
         self.icons = {}
         for _, val in RATIOS:
-            self.icons[val] = (
-                ctk.CTkImage(light_image=ratio_icon(val, (55, 60, 70, 255)),
-                             dark_image=ratio_icon(val, (225, 228, 235, 255)), size=(28, 28)),
-                ctk.CTkImage(ratio_icon(val, (255, 255, 255, 255)), size=(28, 28)))
+            self.icons[val] = (VIcon("ratio:" + val, size=28), VIcon("ratio:" + val, white=True, size=28))
         self.thumb_h = int(round(self.num(cfg.get("thumb_h"), THUMB_H_MIN, THUMB_H_MAX, THUMB_H_DEFAULT)))
         self.placeholder_thumb = ImageTk.PhotoImage(Image.new("RGB", self.thumb_size(), THUMB_BG))
 
@@ -2497,11 +2520,6 @@ class App(_Base):
         self.hq_bar = ctk.CTkProgressBar(hq, mode="indeterminate", width=60, height=5, progress_color=ACCENT)
         self.hq_bar.grid(row=0, column=1, padx=(8, 0))
         self.hq_bar.grid_remove()
-        cmp_btn = IconButton(bar, text="按住對照原圖", width=96, height=28, corner_radius=14, fg_color=BTN,
-                                hover_color=BTN_HOVER, text_color=("gray10", "gray95"), font=ctk.CTkFont(size=12))
-        cmp_btn.grid(row=0, column=1, sticky="w", padx=(4, 0))      # right after the fixed status box: never moves
-        cmp_btn.bind("<ButtonPress-1>", lambda e: self.set_compare(True), add="+")
-        cmp_btn.bind("<ButtonRelease-1>", lambda e: self.set_compare(False), add="+")
         zc = ctk.CTkFrame(bar, fg_color="transparent")
         zc.grid(row=0, column=2, sticky="e")
         small = dict(height=28, corner_radius=14, fg_color=BTN, hover_color=BTN_HOVER,
@@ -2519,7 +2537,7 @@ class App(_Base):
         IconButton(zc, text="100%", width=48, command=lambda: self.zoom_to(1.0), **small
                       ).grid(row=0, column=4, padx=2)
         IconButton(zc, text="適合視窗", width=72, command=self.reset_view, **small).grid(row=0, column=5, padx=(2, 0))
-        ctk.CTkLabel(pv, text="雙指滑動：平移　⌘＋滑動：縮放　雙擊：100% / 適合視窗　按住 \\ ：對照原圖",
+        ctk.CTkLabel(pv, text="雙指滑動：平移　⌘＋滑動：縮放　雙擊：100% / 適合視窗",
                      text_color=MUTED, font=ctk.CTkFont(size=11)).grid(row=2, column=0, pady=(0, 8))
 
         self.right_area = right
@@ -3654,8 +3672,7 @@ class App(_Base):
 
     def render_view(self, fast=False, labels=True):
         self.view_job = None
-        canvas = self.preview_src if (self.compare and self.preview_src is not None) \
-            else (self.hq_canvas or self.fast_canvas)
+        canvas = self.hq_canvas or self.fast_canvas
         if canvas is None:
             return
         cw, ch = canvas.size
@@ -3678,7 +3695,7 @@ class App(_Base):
             else:
                 crop = crop.resize(size, Image.BICUBIC)
         fitted = self.zoom <= 1.0001
-        if fitted and (self.compare or self.frame_style() in ("white", "rounded")):
+        if fitted and self.frame_style() in ("white", "rounded"):
             # preview-only hairline that separates a white canvas from the dark preview area; a blurred background
             # has no such edge, and the line would look like a white ring around it
             crop = ImageOps.expand(crop, border=1, fill=(150, 150, 150))
@@ -3860,17 +3877,6 @@ class App(_Base):
         self.drag = (e.x, e.y)
         self.pan_by(-sx, -sy)
 
-    # ---------------- before / after ----------------
-    def set_compare(self, on):
-        if self.compare == on:
-            return
-        self.compare = on
-        if on:
-            self.hq_lbl.configure(text="● 原圖", text_color=AMBER)
-        else:
-            self.hq_state(self.hq_job is not None or self.hq_running)
-        self.render_view()
-
     # ---------------- presets ----------------
     def preset_names(self):
         return list(BUILTIN_PRESETS) + sorted(self.presets)
@@ -4041,9 +4047,6 @@ class App(_Base):
             self.bind_all(seq, main_only(lambda: self.zoom_step(1.25)))
         self.bind_all("<Command-minus>", main_only(lambda: self.zoom_step(1 / 1.25)))
         self.bind_all("<Command-0>", main_only(self.reset_view))
-        self.bind_all("<KeyPress-backslash>", lambda e: None if (not self.event_in_main(e) or self.typing())
-                      else self.set_compare(True))
-        self.bind_all("<KeyRelease-backslash>", lambda e: self.set_compare(False))
 
     def arrow(self, dx, dy):
         """Zoomed in: pan like a Mac image viewer. At fit: left / right switch photos."""
