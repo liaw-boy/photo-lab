@@ -3,6 +3,11 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 1.0.1 — 2026-10-11
+- Swift app: Help menu "自備品牌 logo 與字體…" shows where to put your own brand logos / fonts and the file-name rules,
+  and opens (creating it when missing) the folder. README has the same walk-through.
+- `package.sh` builds a clean package by default (no brand logos / fonts); `--with-logos` makes a personal build.
+
 ## 1.0.0 — 2026-10-11
 First stable release, and the first one with the native macOS app (`swift/PhotoLab`, Swift / SwiftUI, no Python
 needed). The Python app (`python/`) stays as the cross-platform edition and as the reference renderer.

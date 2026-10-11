@@ -75,12 +75,14 @@ enum AppPaths {
             && fm.fileExists(atPath: r.appendingPathComponent("python").path) {
             return Resources(logosDir: r.appendingPathComponent("logos"), fontsDir: r.appendingPathComponent("fonts"))
         }
-        // a packaged app carries the logos / fonts that were next to it when it was built (package.sh)
-        if let res = Bundle.main.resourceURL, fm.fileExists(atPath: res.appendingPathComponent("logos").path) {
-            return Resources(logosDir: res.appendingPathComponent("logos"), fontsDir: res.appendingPathComponent("fonts"))
-        }
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Photo_Lab")
+        // the user's own logos win; otherwise a personal build carries the ones that were next to it (package.sh)
+        let supportLogos = (try? fm.contentsOfDirectory(atPath: support.appendingPathComponent("logos").path)) ?? []
+        if supportLogos.isEmpty, let res = Bundle.main.resourceURL,
+           fm.fileExists(atPath: res.appendingPathComponent("logos").path) {
+            return Resources(logosDir: res.appendingPathComponent("logos"), fontsDir: res.appendingPathComponent("fonts"))
+        }
         return Resources(logosDir: support.appendingPathComponent("logos"),
                          fontsDir: support.appendingPathComponent("fonts"))
     }
