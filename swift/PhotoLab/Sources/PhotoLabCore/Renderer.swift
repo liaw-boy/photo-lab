@@ -204,7 +204,8 @@ public enum Renderer {
 
     /// Writes a JPEG (embeds the colour profile of the image); atomic: a temp file in the same folder, then rename.
     /// `signature` is stored as a JPEG comment (see `OutputSignature`). With `replace: false` an existing file is
-    /// never touched (the check and the move are one atomic step), and `RenderError.exists` is thrown.
+    /// never touched, and `RenderError.exists` is thrown. The check and the move are one atomic step, except on
+    /// volumes without exclusive rename (exFAT), where the file is checked first and then moved.
     public static func saveJPEG(_ image: CGImage, to url: URL, quality: Double, signature: String? = nil,
                                 replace: Bool = true) throws {
         let dir = url.deletingLastPathComponent()
@@ -226,7 +227,14 @@ public enum Renderer {
         do {
             try data.write(to: tmp, options: [])
             chmod(tmp.path, 0o644)
-            let rc = replace ? rename(tmp.path, url.path) : renamex_np(tmp.path, url.path, UInt32(RENAME_EXCL))
+            var rc = replace ? rename(tmp.path, url.path) : renamex_np(tmp.path, url.path, UInt32(RENAME_EXCL))
+            if rc != 0, !replace, errno == ENOTSUP {                 // e.g. exFAT: no exclusive rename, check first
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try? FileManager.default.removeItem(at: tmp)
+                    throw RenderError.exists
+                }
+                rc = rename(tmp.path, url.path)
+            }
             if rc != 0 {
                 let exists = errno == EEXIST
                 try? FileManager.default.removeItem(at: tmp)

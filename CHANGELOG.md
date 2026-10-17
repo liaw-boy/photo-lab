@@ -3,6 +3,11 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 1.0.2 — 2026-10-17
+- Fix: exporting to an exFAT disk (many external drives) failed for every photo, because the "do not overwrite"
+  save used an exclusive rename that exFAT does not support. It now falls back to checking first, then renaming.
+- The status line now shows why photos failed to export, instead of only the count.
+
 ## 1.0.1 — 2026-10-11
 - Swift app: Help menu "自備品牌 logo 與字體…" shows where to put your own brand logos / fonts and the file-name rules,
   and opens (creating it when missing) the folder. README has the same walk-through.
