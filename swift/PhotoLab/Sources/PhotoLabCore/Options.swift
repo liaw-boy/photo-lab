@@ -60,4 +60,16 @@ public enum RenderError: Error, CustomStringConvertible {
         case .exists: return "the output file already exists"
         }
     }
+
+    /// Short Traditional Chinese reason for the app's status line.
+    public var userMessage: String {
+        switch self {
+        case .unreadable: return "無法讀取照片"
+        case .unsupported: return "不支援的圖片格式"
+        case .tooLarge: return "照片太大"
+        case .renderFailed: return "處理失敗"
+        case .writeFailed: return "無法寫入輸出資料夾"
+        case .exists: return "檔案已存在"
+        }
+    }
 }

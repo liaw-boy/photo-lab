@@ -23,4 +23,15 @@ final class SaveJPEGTests: XCTestCase {
         let left = try FileManager.default.contentsOfDirectory(atPath: dir.path)
         XCTAssertEqual(left, ["a.jpg"], "no temp files left behind")
     }
+
+    func testWriteToMissingFolderFailsWithReadableReason() {
+        let ctx = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photolab_missing_\(UUID().uuidString)/a.jpg")
+        XCTAssertThrowsError(try Renderer.saveJPEG(ctx.makeImage()!, to: dst, quality: 0.9, replace: false)) {
+            XCTAssertEqual(($0 as? RenderError)?.userMessage, "無法寫入輸出資料夾")
+        }
+    }
 }

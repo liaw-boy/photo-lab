@@ -602,7 +602,7 @@ final class AppModel {
         let s = settings, res = resources
         exportTask = Task.detached(priority: .userInitiated) { [weak self] in
             var done = 0, failed = 0, skipped = 0
-            var lastError = ""
+            var reasons: [String: Int] = [:]
             for (n, item) in items.enumerated() {
                 if Task.isCancelled { break }
                 let dst = out.appendingPathComponent(Files.outputName(for: item.url))
@@ -625,7 +625,7 @@ final class AppModel {
                     } catch RenderError.exists {
                         skipped += 1; mark = .skipped
                     } catch {
-                        failed += 1; mark = .failed; lastError = "\(error)"
+                        failed += 1; mark = .failed; reasons[(error as? RenderError)?.userMessage ?? "未知錯誤", default: 0] += 1
                     }
                 }
                 let p = Double(n + 1) / Double(items.count), m = mark
@@ -636,7 +636,8 @@ final class AppModel {
                     model.status = "匯出中 \(n + 1) / \(items.count)"
                 }
             }
-            let (d, sk, f, why) = (done, skipped, failed, lastError)
+            let (d, sk, f) = (done, skipped, failed)
+            let why = reasons.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: "、")
             guard let model = self else { return }
             await MainActor.run {
                 model.exporting = false

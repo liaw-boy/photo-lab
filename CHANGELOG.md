@@ -3,6 +3,10 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 1.0.3 — 2026-10-18
+- Export failures: the status line groups the reasons with counts (e.g. "失敗 29 張（無法寫入輸出資料夾 29）"),
+  in Chinese; unexpected errors show only "未知錯誤" instead of raw error text.
+
 ## 1.0.2 — 2026-10-17
 - Fix: exporting to an exFAT disk (many external drives) failed for every photo, because the "do not overwrite"
   save used an exclusive rename that exFAT does not support. It now falls back to checking first, then renaming.
