@@ -17,6 +17,11 @@ ROOT="$(cd ../.. && pwd)"
 VERSION="$(tr -d ' \n' < "$ROOT/VERSION")"
 case "$VERSION" in *[!0-9.]*|"") echo "bad VERSION: $VERSION" >&2; exit 1 ;; esac
 
+# Updates: the feed is the appcast.xml attached to the latest GitHub release (see release.sh). The public key is
+# not secret; the private one stays in the login keychain (account "photo-lab") and signs every release.
+FEED_URL="https://github.com/liaw-boy/photo-lab/releases/latest/download/appcast.xml"
+SPARKLE_PUBLIC_KEY="/fpsoD6DsSueBfw+aI9mEOZZQp4CTSRmRV4II7urvvY="
+
 swift build -c release
 BIN=".build/release/PhotoLab"
 [ -x "$BIN" ] || { echo "missing $BIN" >&2; exit 1; }
@@ -26,6 +31,16 @@ APP="$DIST/PhotoLab.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/PhotoLab"
+# Sparkle (updates): the framework goes to Contents/Frameworks, found through an rpath added to the executable.
+mkdir -p "$APP/Contents/Frameworks"
+ditto ".build/release/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/PhotoLab"
+# Drop the build machine's rpaths (Xcode toolchain, cryptex mounts): folders outside the bundle that another
+# program could fill with a fake Sparkle.framework. Only the system Swift runtime and the bundle remain.
+otool -l "$APP/Contents/MacOS/PhotoLab" | awk '$1 == "cmd" { rp = ($2 == "LC_RPATH") } rp && $1 == "path" { print $2 }' |
+  while IFS= read -r p; do
+    case "$p" in @*|/usr/lib/swift) ;; *) install_name_tool -delete_rpath "$p" "$APP/Contents/MacOS/PhotoLab" ;; esac
+  done
 cp "$ROOT/assets/PhotoLab.icns" "$APP/Contents/Resources/PhotoLab.icns"
 cp "$ROOT/assets/icon_1024.png" "$APP/Contents/Resources/icon_1024.png"
 cp "$ROOT/VERSION" "$APP/Contents/Resources/VERSION"
@@ -47,6 +62,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key><string>Photo_Lab</string>
+  <key>CFBundleDevelopmentRegion</key><string>zh_TW</string>
+  <key>CFBundleAllowMixedLocalizations</key><true/>
   <key>CFBundleDisplayName</key><string>Photo_Lab</string>
   <key>CFBundleIdentifier</key><string>app.photolab.PhotoLab</string>
   <key>CFBundleExecutable</key><string>PhotoLab</string>
@@ -58,11 +75,20 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.photography</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>SUFeedURL</key><string>$FEED_URL</string>
+  <key>SUPublicEDKey</key><string>$SPARKLE_PUBLIC_KEY</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUAllowsAutomaticUpdates</key><false/>
+  <key>SURequireSignedFeed</key><true/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
 </dict>
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP"
+# Hardened runtime: DYLD_* environment variables are ignored, so nothing can be injected at launch.
+# Sparkle (with its helper apps) is signed first, then the app with its entitlements (not passed down).
+codesign --force --deep --options runtime --sign - "$APP/Contents/Frameworks/Sparkle.framework"
+codesign --force --options runtime --entitlements PhotoLab.entitlements --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
 SUFFIX=""; [ "$WITH_LOGOS" = 1 ] && SUFFIX="-with-logos"

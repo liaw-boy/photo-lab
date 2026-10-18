@@ -3,6 +3,16 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 1.1.0 — 2026-10-18
+- Updates from GitHub: the app checks once a day for a newer release, shows its notes and installs it with one
+  click, then restarts. A 檢查更新 button beside the title (also Photo_Lab → 檢查更新…) checks by hand and turns
+  into 有新版本 x.y.z when one is found. The update dialog and the standard menus are in Traditional Chinese. Nothing is installed without asking. Built on Sparkle 2.10.0;
+  every update must carry an EdDSA signature made with the publisher's key, so a changed download is refused.
+- The check contacts GitHub (github.com and its download servers), which sees your IP address and app version.
+- Hardened runtime; libraries are only loaded from the system or the app bundle (no build-machine paths).
+- `release.sh` makes the signed update feed (`appcast.xml`) and, with `--publish`, the GitHub release.
+- From 1.0.3 or older, install 1.1.0 once by hand; later versions then arrive through the app.
+
 ## 1.0.3 — 2026-10-18
 - Export failures: the status line groups the reasons with counts (e.g. "失敗 29 張（無法寫入輸出資料夾 29）"),
   in Chinese; unexpected errors show only "未知錯誤" instead of raw error text.

@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let icon = NSImage(contentsOf: AppPaths.iconURL()) {
             NSApp.applicationIconImage = icon           // the same icon as the Python version
         }
+        _ = Updater.shared                              // starts the daily update check (packaged app only)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -52,6 +53,12 @@ struct PhotoLabApp: App {
         }
         .defaultSize(width: 1380, height: 880)
         .commands {
+            CommandGroup(after: .appInfo) {
+                if Updater.shared.isAvailable {
+                    Button("檢查更新…") { Updater.shared.checkForUpdates() }
+                        .disabled(!Updater.shared.canCheck)
+                }
+            }
             CommandMenu("外觀") {
                 Picker("外觀", selection: $model.appearance) {
                     Text("淺色").tag("light")

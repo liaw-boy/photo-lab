@@ -9,10 +9,13 @@ let package = Package(
         .executable(name: "photolab-render", targets: ["photolab-render"]),
         .executable(name: "PhotoLab", targets: ["PhotoLabApp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
+    ],
     targets: [
         .target(name: "PhotoLabCore"),
         .executableTarget(name: "photolab-render", dependencies: ["PhotoLabCore"]),
         .testTarget(name: "PhotoLabCoreTests", dependencies: ["PhotoLabCore"]),
-        .executableTarget(name: "PhotoLabApp", dependencies: ["PhotoLabCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
+        .executableTarget(name: "PhotoLabApp", dependencies: ["PhotoLabCore", .product(name: "Sparkle", package: "Sparkle")], swiftSettings: [.swiftLanguageMode(.v5)]),
     ]
 )

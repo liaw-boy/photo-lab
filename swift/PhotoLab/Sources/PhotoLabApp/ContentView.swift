@@ -99,6 +99,13 @@ struct ContentView: View {
                     Text(AppPaths.version.isEmpty ? "" : "版本 \(AppPaths.version)").font(.system(size: 11)).foregroundStyle(Paper.muted)
                 }
                 Spacer()
+                if Updater.shared.isAvailable {
+                    let newVersion = Updater.shared.newVersion
+                    Button(newVersion.map { "有新版本 \($0)" } ?? "檢查更新") { Updater.shared.checkForUpdates() }
+                        .buttonStyle(PaperButtonStyle(filled: newVersion != nil, compact: true))
+                        .disabled(!Updater.shared.canCheck)
+                        .help(newVersion == nil ? "到 GitHub 檢查是否有新版本" : "按下查看更新內容並安裝")
+                }
             }
             .padding(.bottom, 0)
             presetCard
