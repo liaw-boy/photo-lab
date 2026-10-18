@@ -202,14 +202,14 @@ public enum Renderer {
 
     // MARK: saving
 
-    /// Writes a JPEG (embeds the colour profile of the image); atomic: a temp file in the same folder, then rename.
-    /// `signature` is stored as a JPEG comment (see `OutputSignature`). With `replace: false` an existing file is
-    /// never touched, and `RenderError.exists` is thrown. The check and the move are one atomic step, except on
-    /// volumes without exclusive rename (exFAT), where the file is checked first and then moved.
+    /// Writes a JPEG (embeds the colour profile of the image). `signature` is stored as a JPEG comment (see
+    /// `OutputSignature`). Atomic: a temp file in the same folder, then a rename. With `replace: false` an existing
+    /// file is never touched and `RenderError.exists` is thrown: the rename is exclusive, or on volumes that turn
+    /// exclusive rename down (exFAT, some network / FUSE volumes) the file is created with O_EXCL and written in
+    /// place (see `writeExclusive`).
     public static func saveJPEG(_ image: CGImage, to url: URL, quality: Double, signature: String? = nil,
                                 replace: Bool = true) throws {
         let dir = url.deletingLastPathComponent()
-        let tmp = dir.appendingPathComponent(".ig_tmp_\(UUID().uuidString).jpg")
         let q = Int((min(1, max(0, quality)) * 100).rounded())
         var data: Data
         if let own = JPEGEncoder.encode(image, quality: q, comment: signature.map { OutputSignature.commentPrefix + $0 }) {
@@ -224,27 +224,82 @@ public enum Renderer {
             data = buffer as Data
             if let signature { data = OutputSignature.insertComment(signature, into: data) }
         }
+        let tmp = dir.appendingPathComponent(".ig_tmp_\(UUID().uuidString).jpg")
         do {
             try data.write(to: tmp, options: [])
-            chmod(tmp.path, 0o644)
-            var rc = replace ? rename(tmp.path, url.path) : renamex_np(tmp.path, url.path, UInt32(RENAME_EXCL))
-            if rc != 0, !replace, errno == ENOTSUP {                 // e.g. exFAT: no exclusive rename, check first
-                if FileManager.default.fileExists(atPath: url.path) {
-                    try? FileManager.default.removeItem(at: tmp)
-                    throw RenderError.exists
-                }
-                rc = rename(tmp.path, url.path)
-            }
-            if rc != 0 {
-                let exists = errno == EEXIST
-                try? FileManager.default.removeItem(at: tmp)
-                throw exists ? RenderError.exists : RenderError.writeFailed
-            }
-        } catch let e as RenderError {
-            throw e
         } catch {
             try? FileManager.default.removeItem(at: tmp)
             throw RenderError.writeFailed
         }
+        chmod(tmp.path, 0o644)
+        if replace {
+            let err = rename(tmp.path, url.path) == 0 ? 0 : errno
+            if err != 0 { try? FileManager.default.removeItem(at: tmp) }
+            try check(err)
+        } else {
+            try check(storeWithoutOverwriting(data, tmp: tmp, at: url))
+        }
+    }
+
+    /// The `replace: false` move of the written temp file: exclusive rename, or `writeExclusive` when the volume
+    /// turns that down. (exFAT answers EEXIST when the name is taken, which is the right answer here, and ENOTSUP
+    /// when it is free.) `renameExclusive` is replaceable so tests can play such a volume. Returns 0 or an errno.
+    static func storeWithoutOverwriting(_ data: Data, tmp: URL, at url: URL,
+                                        renameExclusive: (URL, URL) -> Int32 = { from, to in
+                                            renamex_np(from.path, to.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
+                                        }) -> Int32 {
+        let err = renameExclusive(tmp, url)
+        if err != 0 { try? FileManager.default.removeItem(at: tmp) }
+        return lacksExclusiveRename(err) ? writeExclusive(data, to: url) : err
+    }
+
+    private static func check(_ err: Int32) throws {
+        if err != 0 { throw err == EEXIST ? RenderError.exists : RenderError.writeFailed }
+    }
+
+    /// errno values with which a volume turns down RENAME_EXCL itself (as opposed to "the name exists").
+    static func lacksExclusiveRename(_ err: Int32) -> Bool {
+        [ENOTSUP, EOPNOTSUPP, EINVAL, ENOSYS].contains(err)
+    }
+
+    /// For volumes without exclusive rename: creates `url` with O_EXCL, which is atomic there too (EEXIST when the
+    /// name is taken, so nothing is ever replaced), and writes the JPEG into it. Unlike the temp-file path, another
+    /// program may see the file while it is being written. When writing fails, the file this call created is
+    /// removed (checked by inode and size first; exFAT makes inode numbers up, so a same-named file another app
+    /// saves in that instant is not told apart for sure). A crash in the middle can leave a cut-off file: it has no
+    /// JPEG end marker, so `OutputSignature.existing` does not take it for a finished export and the overwrite
+    /// prompt counts it as different; it is never removed on a guess. Like the temp-file path, no fsync. Network / FUSE file systems that only emulate O_EXCL give no such
+    /// guarantee. Returns 0 or an errno. (Foundation's `.withoutOverwriting` also uses O_EXCL, but leaves a partial
+    /// file behind when the disk fills up.)
+    static func writeExclusive(_ data: Data, to url: URL) -> Int32 {
+        var fd: Int32
+        repeat { fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644) } while fd < 0 && errno == EINTR
+        guard fd >= 0 else { return errno }
+        fchmod(fd, 0o644)                                        // as the temp-file path, whatever the umask
+        var err: Int32 = 0
+        data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+            var done = 0
+            while done < buf.count {
+                let n = write(fd, buf.baseAddress! + done, buf.count - done)
+                if n > 0 { done += n; continue }
+                if n < 0 && errno == EINTR { continue }
+                err = n < 0 ? errno : EIO                        // 0 bytes written: no progress, do not spin
+                return
+            }
+        }
+        // Identity of the file this call created, taken after writing: exFAT makes inode numbers up from where the
+        // data lies, so they change once the empty file gets its first cluster. (fstat on an open file only fails
+        // when the volume is gone, and then nothing could be removed anyway.)
+        var mine = stat()
+        let known = fstat(fd, &mine) == 0
+        if close(fd) != 0, errno != EINTR, err == 0 { err = errno }   // EINTR: on macOS the fd is closed anyway
+        if err != 0 {
+            var now = stat()
+            if known, lstat(url.path, &now) == 0, (now.st_mode & S_IFMT) == S_IFREG,
+               now.st_dev == mine.st_dev, now.st_ino == mine.st_ino, now.st_size <= mine.st_size {
+                unlink(url.path)                                 // the file this call created
+            }
+        }
+        return err
     }
 }

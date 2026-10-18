@@ -32,12 +32,21 @@ final class Updater: NSObject, SPUUpdaterDelegate {
 
     func checkForUpdates() { controller?.checkForUpdates(nil) }
 
-    nonisolated func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-        let v = item.displayVersionString
-        Task { @MainActor in self.newVersion = v }
+    // SPUUpdaterDelegate is main-actor (NS_SWIFT_UI_ACTOR): Sparkle calls these on the main thread, in order.
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        newVersion = item.displayVersionString
     }
 
-    nonisolated func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
-        Task { @MainActor in self.newVersion = nil }
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        newVersion = nil
+    }
+
+    /// 跳過此版本: Sparkle will not offer that version again, so the button goes back to 檢查更新. While installing,
+    /// a skip may only cancel that install (SPUUserDriver.h), so the button is left for the next check to settle.
+    /// 暫緩提醒 and a failed check, download or install leave it as well: the newer version is still there.
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice,
+                 forUpdate updateItem: SUAppcastItem, state: SPUUserUpdateState) {
+        if choice == .skip, state.stage != .installing { newVersion = nil }
     }
 }

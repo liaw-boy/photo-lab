@@ -3,6 +3,23 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 1.1.1 — 2026-10-18
+- Export without overwrite on exFAT and other volumes without exclusive rename (also those that report it as
+  EINVAL / ENOSYS): the output file is now created with O_EXCL and written in place, so a file that exists or
+  appears at the same moment (another export, another app) is never replaced. Not covered: network / FUSE file
+  systems that only emulate O_EXCL. On these volumes a half-written file can be seen while it is written; a crash
+  can leave a cut-off file. APFS and other volumes with exclusive rename keep the atomic temp-file-and-rename save.
+- The overwrite prompt counts an output without the JPEG end marker (cut off while written) as different from the
+  current settings instead of up to date. Choosing to skip existing files still skips it; choose overwrite to
+  replace it.
+- The 有新版本 button goes back to 檢查更新 after 跳過此版本 (before installing has begun); it stays after 暫緩提醒,
+  a skip while installing, or a failed check, download or install, since the newer version is still on offer. The
+  next daily check settles it.
+- `release.sh --publish`: the GitHub release creates its tag in the same step (no stray tag when an upload fails;
+  tags are now lightweight). It stops before building when origin is not this repository, when the tag or a release
+  (also a leftover draft) already exists on GitHub, or when either lookup fails.
+- CI (`.github/workflows/ci.yml`): build and test on pushes to main and on pull requests.
+
 ## 1.1.0 — 2026-10-18
 - Updates from GitHub: the app checks once a day for a newer release, shows its notes and installs it with one
   click, then restarts. A 檢查更新 button beside the title (also Photo_Lab → 檢查更新…) checks by hand and turns

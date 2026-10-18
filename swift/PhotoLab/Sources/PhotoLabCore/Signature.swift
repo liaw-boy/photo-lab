@@ -48,6 +48,10 @@ public enum OutputSignature {
             if marker == 0xFE {
                 let body = head.subdata(in: (i + 4)..<(i + 2 + len))
                 if let text = String(data: body, encoding: .utf8), text.hasPrefix(prefix) {
+                    // A file cut off while it was written (exFAT writes in place) has the header but no end
+                    // marker: it is no finished output, whatever its signature says.
+                    guard let end = try? h.seekToEnd(), end >= 2, (try? h.seek(toOffset: end - 2)) != nil,
+                          let tail = try? h.read(upToCount: 2), tail == Data([0xFF, 0xD9]) else { return nil }
                     return String(text.dropFirst(prefix.count).prefix(16))
                 }
             }

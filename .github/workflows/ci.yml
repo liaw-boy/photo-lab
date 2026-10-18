@@ -1,0 +1,50 @@
+name: CI
+
+# Build and test only. No signing, packaging or release here (the Sparkle key stays in the local keychain).
+on:
+  push:
+    branches: [main]                 # releases are cut from pushed main (release.sh --publish)
+    paths:
+      - "swift/**"
+      - "VERSION"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "swift/**"
+      - "VERSION"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: swift/PhotoLab
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Only the downloaded dependencies (Sparkle), keyed by their pinned versions; build products are not cached.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            swift/PhotoLab/.build/artifacts
+            swift/PhotoLab/.build/checkouts
+            swift/PhotoLab/.build/repositories
+          key: swiftpm-deps-${{ runner.os }}-${{ hashFiles('swift/PhotoLab/Package.resolved') }}
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
