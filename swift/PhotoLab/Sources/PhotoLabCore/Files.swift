@@ -25,6 +25,12 @@ public enum Files {
         return stem + ((ext == "jpg" || ext == "jpeg") ? "_ig.jpg" : "_\(ext)_ig.jpg")
     }
 
+    /// `a_ig.jpg`, 2 -> `a_ig-2.jpg` (as Lightroom numbers a new name for an existing file).
+    public static func numberedName(_ name: String, _ n: Int) -> String {
+        let u = URL(fileURLWithPath: name)
+        return u.deletingPathExtension().lastPathComponent + "-\(n)." + u.pathExtension
+    }
+
     /// True when the folders are the same or one contains the other.
     public static func conflict(_ a: URL, _ b: URL) -> Bool {
         let x = a.resolvingSymlinksInPath().standardizedFileURL.pathComponents

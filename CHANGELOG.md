@@ -3,6 +3,43 @@
 Version number lives in `VERSION` (single source; shown in the window title and the header).
 Scheme: `MAJOR.MINOR.PATCH` — while MAJOR is 0, MINOR = new feature / UI change, PATCH = bug fix.
 
+## 1.2.0 — 2026-10-18
+- Outputs know their source: each one carries a source ID in its JPEG comment, an HMAC (with a key made on this
+  Mac and kept in the settings, so nothing can be read back from a shared picture) of what stays the same when a
+  folder is renamed or moved, a disk mounts under another name, or the photo is edited and exported again: the
+  file name, the capture time, the camera model and serial number (the serial only goes into the HMAC; the path,
+  for pictures without a capture time). A photo's earlier output is found among `IMG_1234_ig.jpg`, `-2`, `-3` ...
+  whatever is selected, and an output from 1.2 on that belongs to another photo with the same name, or a file of
+  another tool, is never overwritten or taken for it: the new output gets the next free number. Outputs made
+  before 1.2 have no ID and are matched by their plain name, as before (the prompt says how many). Not told apart:
+  versions of one original with the same file name and the same capture data in two folders (say a colour and a
+  black-and-white virtual copy exported under one name): give versions different file names.
+- The key lives in its own file (`source.key` next to the settings, mode 0600), made once and never replaced, also
+  when it cannot be read (the app then says so when it starts and uses a key for that run only). Another Mac or a
+  lost key does not recognise earlier outputs: new ones get numbers, nothing is overwritten.
+- What each photo gets (write, overwrite, copy, skip) is decided in one place; the prompt and the export use it.
+  Right before an overwrite the file is checked again; if it is no longer the photo's own, a numbered copy is
+  written instead.
+- Privacy: the source ID reveals nothing about the photo, but pictures shared from one Mac that came from the same
+  original carry the same ID, so someone holding several of them can tell they share an original.
+- Hardening: output files are read only when they are regular files (no symlinks; a FIFO cannot stall the scan);
+  the key file is written in one step and used only when it is a regular file of this user, not readable by others.
+- An own output cut off while it was written (exFAT) is always written again, also with 略過.
+- 既有檔案 (in 來源與輸出, remembered), for a photo whose own earlier output is in the output folder, as in
+  Lightroom: 每次詢問 (default), 自動改名 (a new copy at the next free `-2`, `-3` ...), 覆蓋, 略過. With 每次詢問
+  the prompt offers the same three.
+- Photos of one export that share a name (the same file name in two folders, or differing only in case) no
+  longer skip or overwrite each other; the status line says how many got a number.
+- 來源管理 shows, per source, how many photos already have their own output in the current output folder
+  (`N 張 · 已輸出 M`).
+- Choosing another output folder clears the 完成 / 略過 / 失敗 marks of the last export; the folder cannot be
+  changed while an export runs.
+- 自動改名 writes the picture once and only retries the no-overwrite move for the next number. On exFAT the temp
+  file is removed before the direct write (never two copies on the disk), and once a disk has turned exclusive
+  rename down, later photos go straight to the direct write.
+- The output folder is scanned in the background (the window no longer waits for a slow disk); the 已輸出 counts
+  are worked out when 來源管理 opens.
+
 ## 1.1.1 — 2026-10-18
 - Export without overwrite on exFAT and other volumes without exclusive rename (also those that report it as
   EINVAL / ENOSYS): the output file is now created with O_EXCL and written in place, so a file that exists or

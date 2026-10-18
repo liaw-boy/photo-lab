@@ -209,10 +209,16 @@ public enum Renderer {
     /// place (see `writeExclusive`).
     public static func saveJPEG(_ image: CGImage, to url: URL, quality: Double, signature: String? = nil,
                                 replace: Bool = true) throws {
-        let dir = url.deletingLastPathComponent()
+        try store(try encodeJPEG(image, quality: quality, signature: signature), to: url, replace: replace)
+    }
+
+    /// The JPEG bytes `saveJPEG` writes; `source` (an `OutputSignature.sourceID`) is stored next to the signature.
+    public static func encodeJPEG(_ image: CGImage, quality: Double, signature: String? = nil,
+                                  source: String? = nil) throws -> Data {
         let q = Int((min(1, max(0, quality)) * 100).rounded())
         var data: Data
-        if let own = JPEGEncoder.encode(image, quality: q, comment: signature.map { OutputSignature.commentPrefix + $0 }) {
+        let comment = signature.map { OutputSignature.comment(signature: $0, source: source) }
+        if let own = JPEGEncoder.encode(image, quality: q, comment: comment) {
             data = own                                           // 4:4:4, profile embedded, signature in a COM segment
         } else {                                                 // (cannot happen for our canvases; ImageIO as a fallback)
             let buffer = NSMutableData()
@@ -222,9 +228,32 @@ public enum Renderer {
             CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
             guard CGImageDestinationFinalize(dest) else { throw RenderError.writeFailed }
             data = buffer as Data
-            if let signature { data = OutputSignature.insertComment(signature, into: data) }
+            if let comment { data = OutputSignature.insertComment(comment, into: data) }
         }
-        let tmp = dir.appendingPathComponent(".ig_tmp_\(UUID().uuidString).jpg")
+        return data
+    }
+
+    /// Writes encoded JPEG bytes the way `saveJPEG` describes.
+    public static func store(_ data: Data, to url: URL, replace: Bool) throws {
+        if replace {
+            let tmp = try writeTemp(data, near: url)
+            let err = rename(tmp.path, url.path) == 0 ? 0 : errno
+            if err != 0 { try? FileManager.default.removeItem(at: tmp) }
+            try check(err)
+        } else {
+            _ = try storeUnique(data, base: url, first: 1, reserved: [], limit: 1)
+        }
+    }
+
+    public typealias ExclusiveRename = (URL, URL) -> Int32
+
+    /// rename with RENAME_EXCL; 0 or an errno.
+    public static func renameExclusively(_ from: URL, _ to: URL) -> Int32 {
+        renamex_np(from.path, to.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
+    }
+
+    private static func writeTemp(_ data: Data, near url: URL) throws -> URL {
+        let tmp = url.deletingLastPathComponent().appendingPathComponent(".ig_tmp_\(UUID().uuidString).jpg")
         do {
             try data.write(to: tmp, options: [])
         } catch {
@@ -232,25 +261,68 @@ public enum Renderer {
             throw RenderError.writeFailed
         }
         chmod(tmp.path, 0o644)
-        if replace {
-            let err = rename(tmp.path, url.path) == 0 ? 0 : errno
-            if err != 0 { try? FileManager.default.removeItem(at: tmp) }
-            try check(err)
-        } else {
-            try check(storeWithoutOverwriting(data, tmp: tmp, at: url))
-        }
+        return tmp
     }
 
-    /// The `replace: false` move of the written temp file: exclusive rename, or `writeExclusive` when the volume
-    /// turns that down. (exFAT answers EEXIST when the name is taken, which is the right answer here, and ENOTSUP
-    /// when it is free.) `renameExclusive` is replaceable so tests can play such a volume. Returns 0 or an errno.
-    static func storeWithoutOverwriting(_ data: Data, tmp: URL, at url: URL,
-                                        renameExclusive: (URL, URL) -> Int32 = { from, to in
-                                            renamex_np(from.path, to.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
-                                        }) -> Int32 {
-        let err = renameExclusive(tmp, url)
-        if err != 0 { try? FileManager.default.removeItem(at: tmp) }
-        return lacksExclusiveRename(err) ? writeExclusive(data, to: url) : err
+    /// Volumes that turned exclusive rename down in this run: saves there go straight to `writeExclusive`, without
+    /// first writing a temp file that could only be thrown away. Known by the volume's UUID (a device number can
+    /// come back for another disk after an unplug), so an unknown volume is never assumed to be one of them.
+    private static let directVolumes = DirectVolumes()
+
+    private final class DirectVolumes: @unchecked Sendable {
+        private var volumes = Set<String>()
+        private let lock = NSLock()
+        func contains(_ v: String) -> Bool { lock.lock(); defer { lock.unlock() }; return volumes.contains(v) }
+        func insert(_ v: String) { lock.lock(); volumes.insert(v); lock.unlock() }
+    }
+
+    private static func volume(of dir: URL) -> String? {
+        (try? dir.resourceValues(forKeys: [.volumeUUIDStringKey]))?.volumeUUIDString
+    }
+
+    /// Writes next to `base` (an output name) under the first free name from number `first` on (1 = `base`
+    /// itself, then `a_ig-2.jpg`, `-3` ... up to `limit`), skipping the names in `reserved` (lower-cased; other
+    /// photos of the same export). Nothing is ever replaced: each name is tried with an exclusive rename of a temp
+    /// file written once, or, on volumes that turn that down (exFAT; `renameExclusive` lets tests play one), with
+    /// `writeExclusive`, after the temp file is removed so the disk never holds two copies. A name taken in the
+    /// meantime just moves on to the next number. Returns where it was written.
+    public static func storeUnique(_ data: Data, base: URL, first: Int = 2, reserved: Set<String>,
+                                   limit: Int = 9999) throws -> URL {
+        try storeUnique(data, base: base, first: first, reserved: reserved, limit: limit,
+                        renameExclusive: renameExclusively, remember: true)
+    }
+
+    /// `remember`: note a volume that turns exclusive rename down (off when a test plays such a volume).
+    static func storeUnique(_ data: Data, base: URL, first: Int = 2, reserved: Set<String>, limit: Int = 9999,
+                            renameExclusive: ExclusiveRename, remember: Bool = false) throws -> URL {
+        let dir = base.deletingLastPathComponent(), name = base.lastPathComponent
+        let dev = remember ? volume(of: dir) : nil
+        var tmp: URL? = nil
+        if !(dev.map(directVolumes.contains) ?? false) { tmp = try writeTemp(data, near: base) }
+        defer { if let tmp { try? FileManager.default.removeItem(at: tmp) } }
+        let lo = max(1, first)
+        guard lo <= limit else { throw RenderError.exists }
+        for n in lo...limit {
+            let candidate = n == 1 ? name : Files.numberedName(name, n)
+            if reserved.contains(candidate.lowercased()) { continue }
+            let url = dir.appendingPathComponent(candidate)
+            var err: Int32
+            if let t = tmp {
+                err = renameExclusive(t, url)
+                if err == 0 { tmp = nil; return url }            // the temp file is the output now
+                if lacksExclusiveRename(err) {
+                    try? FileManager.default.removeItem(at: t)
+                    tmp = nil
+                    if let dev { directVolumes.insert(dev) }
+                    err = writeExclusive(data, to: url)
+                }
+            } else {
+                err = writeExclusive(data, to: url)
+            }
+            if err == 0 { return url }
+            if err != EEXIST { throw RenderError.writeFailed }
+        }
+        throw RenderError.exists
     }
 
     private static func check(_ err: Int32) throws {

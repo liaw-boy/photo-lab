@@ -39,6 +39,20 @@ struct OverwritePrompt: Identifiable {
     let id = UUID()
     let existing: Int
     let different: Int
+    let numbered: Int          // new outputs that get -2, -3 ... (another file already has the plain name)
+    let legacy: Int            // of `existing`: outputs from before 1.2, matched by name only
+}
+
+/// What an export does with an output file that already exists (Lightroom's 既有檔案).
+extension ExistingFiles {
+    var label: String {
+        switch self {
+        case .ask: return "每次詢問"
+        case .rename: return "自動改名（-2）"
+        case .overwrite: return "覆蓋"
+        case .skip: return "略過"
+        }
+    }
 }
 
 /// Where logos/ and fonts/ are: PHOTOLAB_ROOT, the repository this binary was built in, or Application Support.
@@ -114,7 +128,29 @@ final class AppModel {
     static let thumbRange = 56.0...180.0
     var photos: [PhotoItem] = []
     var selected: URL? { didSet { if selected != oldValue { loadPreviewSource() } } }
-    var outputDir: URL? { didSet { if outputDir != oldValue { scheduleSave() } } }
+    var outputDir: URL? {
+        didSet {
+            guard outputDir != oldValue else { return }
+            for i in photos.indices { photos[i].mark = .none }   // marks were about the old folder
+            exportedCounts = [:]
+            importedExported = nil
+            scheduleSave()
+        }
+    }
+    var existingFiles = ExistingFiles.ask { didSet { if existingFiles != oldValue { scheduleSave() } } }
+    /// Photos per source folder, and how many of them have an output in the current output folder.
+    var exportedCounts: [URL: Int] = [:]
+    var importedExported: Int?
+    var importedCount: Int?                 // imported photos that still exist
+    private var countsGeneration = 0
+    /// The source manager is open: counts also include 已輸出.
+    var countsShowExported = false
+    /// Shown once in an alert when the app starts (a problem the user must know about).
+    var startupWarning: String?
+    private(set) var planning = false       // an export is being planned (scanning the output folder)
+    /// Key of the source IDs written into outputs; made once per Mac (see `SourceKeyStore`).
+    private(set) var sourceKey = Data()
+    private let sourceIDs = SourceIDCache()
     var preview: NSImage?
     var previewNote = "還沒有照片：按左邊的「選擇」加入資料夾或照片"
     var status = "待機中"
@@ -167,6 +203,14 @@ final class AppModel {
         settings = saved.settings
         presets = saved.presets
         if let p = saved.outputDir { outputDir = URL(fileURLWithPath: p, isDirectory: true) }
+        existingFiles = saved.existingFiles
+        let (key, kept) = SourceKeyStore.load()
+        sourceKey = key
+        if !kept {
+            startupWarning = "讀不到來源金鑰檔（Application Support/Photo_Lab/source.key），已改用這次專用的金鑰。"
+                + "這次匯出的照片，之後不會被認成同一張（只會另存 -2、-3…，不會覆蓋）。"
+                + "金鑰檔沒有被更動；如果它損壞了，可以移走它，下次啟動會建立新的。"
+        }
         folders = saved.folders.map { URL(fileURLWithPath: $0, isDirectory: true) }
         imported = saved.imported.map { URL(fileURLWithPath: $0) }
         view = SourceView(key: saved.view)
@@ -196,6 +240,7 @@ final class AppModel {
         var st = SavedState()
         st.settings = settings
         st.outputDir = outputDir?.path
+        st.existingFiles = existingFiles
         st.folders = folders.map(\.path)
         st.imported = imported.map(\.path)
         st.view = view.key
@@ -271,13 +316,37 @@ final class AppModel {
         reloadPhotos()
     }
 
-    func refreshCounts() {
-        let list = folders
+    /// Photos per folder; with `exported` (the source manager asks for it when it opens) also how many of them
+    /// already have their own output in the current output folder (`ExportPlan.exported`), which reads the
+    /// headers of the outputs there. In the background; a newer request wins over an older one still running.
+    func refreshCounts(exported: Bool? = nil) {
+        let exported = exported ?? countsShowExported
+        countsGeneration += 1
+        let generation = countsGeneration
+        let list = folders, imp = imported, out = exported ? outputDir : nil, key = sourceKey, cache = sourceIDs
+        if !exported { exportedCounts = [:]; importedExported = nil }
         Task.detached(priority: .utility) { [weak self] in
-            var counts: [URL: Int] = [:]
-            for f in list { counts[f] = Files.photos(in: f).count }
+            var files: [URL: [URL]] = [:]
+            for f in list { files[f] = Files.photos(in: f) }
+            let impFiles = imp.filter { FileManager.default.fileExists(atPath: $0.path) }
+            var counts: [URL: Int] = [:], done: [URL: Int] = [:]
+            var impDone: Int?
+            for (f, fs) in files { counts[f] = fs.count }
+            if let out {
+                let all = list.flatMap { files[$0] ?? [] } + impFiles      // the order of 全部照片
+                let index = ExportPlan.scan(out, stems: Set(all.map(ExportPlan.stem(for:))))
+                let has = ExportPlan.exported(sources: all, id: { cache.id(for: $0, key: key) }, index: index)
+                for (f, fs) in files { done[f] = fs.filter { has[$0] == true }.count }
+                impDone = impFiles.filter { has[$0] == true }.count
+            }
+            let (c, d, i, ic) = (counts, done, impDone, impFiles.count)
             guard let model = self else { return }
-            await MainActor.run { model.folderCounts = counts }
+            await MainActor.run {
+                guard generation == model.countsGeneration else { return }   // an older request: drop it
+                model.folderCounts = c
+                model.importedCount = ic
+                if out != nil { model.exportedCounts = d; model.importedExported = i }
+            }
         }
     }
 
@@ -565,9 +634,10 @@ final class AppModel {
         outputDir = url
     }
 
-    /// Checks the rules, asks about files that already exist, then runs.
+    /// Checks the rules, then works out in the background where each photo goes (its own earlier output, or a
+    /// new name: see `ExportPlan`), asks about earlier outputs when 既有檔案 is 每次詢問, and runs.
     func export() {
-        guard !exporting else { return }
+        guard !exporting, !planning else { return }
         let items = photos.filter(\.checked)
         guard !items.isEmpty else { status = "沒有勾選的照片"; return }
         if outputDir == nil { chooseOutput() }
@@ -576,38 +646,75 @@ final class AppModel {
             status = "輸出資料夾不能和來源資料夾相同或互相包含"
             return
         }
-        let s = settings
-        var existing = 0, different = 0
-        for item in items {
-            let dst = out.appendingPathComponent(Files.outputName(for: item.url))
-            guard FileManager.default.fileExists(atPath: dst.path) else { continue }
-            existing += 1
-            let sig = OutputSignature.make(source: item.url, settings: s.fingerprintSource)
-            if OutputSignature.existing(at: dst) != sig { different += 1 }
+        let policy = existingFiles, fingerprint = settings.fingerprintSource
+        plan(items, out: out) { [weak self] entries, index in
+            guard let self else { return }
+            if policy == .ask {
+                var existing = 0, different = 0, legacy = 0
+                for (item, e) in zip(items, entries) where e.own {
+                    existing += 1
+                    if index[e.name]?.source == nil { legacy += 1 }
+                    let sig = OutputSignature.make(source: item.url, settings: fingerprint)
+                    if !e.complete || index[e.name]?.signature != sig { different += 1 }
+                }
+                if existing > 0 {
+                    self.overwritePrompt = OverwritePrompt(existing: existing, different: different,
+                                                           numbered: self.numberedCount(items, entries), legacy: legacy)
+                    return
+                }
+            }
+            self.run(items: items, entries: entries, out: out, policy: policy == .ask ? .skip : policy)
         }
-        if existing > 0 { overwritePrompt = OverwritePrompt(existing: existing, different: different); return }
-        run(items: items, out: out, overwrite: false)
     }
 
-    func resolveOverwrite(overwrite: Bool?) {
+    /// The answer to the prompt: .overwrite, .rename or .skip, or nil to cancel. Planned again, in case the
+    /// folder changed while the prompt was open.
+    func resolveOverwrite(_ choice: ExistingFiles?) {
         overwritePrompt = nil
-        guard let overwrite, let out = outputDir else { return }
-        run(items: photos.filter(\.checked), out: out, overwrite: overwrite)
+        guard let choice, choice != .ask, let out = outputDir, !exporting, !planning else { return }
+        let items = photos.filter(\.checked)
+        plan(items, out: out) { [weak self] entries, _ in
+            self?.run(items: items, entries: entries, out: out, policy: choice)
+        }
     }
 
-    private func run(items: [PhotoItem], out: URL, overwrite: Bool) {
+    /// Scans the output folder and plans the export off the main thread (a slow disk must not stall the window),
+    /// then hands the result back on it.
+    private func plan(_ items: [PhotoItem], out: URL,
+                      then: @escaping @MainActor ([ExportEntry], [String: OutputInfo]) -> Void) {
+        planning = true
+        status = "檢查輸出資料夾…"
+        let urls = items.map(\.url), key = sourceKey, cache = sourceIDs
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let index = ExportPlan.scan(out, stems: Set(urls.map(ExportPlan.stem(for:))))
+            let entries = ExportPlan.plan(sources: urls, id: { cache.id(for: $0, key: key) }, index: index)
+            await MainActor.run {
+                guard let model = self else { return }
+                model.planning = false
+                model.status = "待機中"
+                then(entries, index)
+            }
+        }
+    }
+
+    private func numberedCount(_ items: [PhotoItem], _ entries: [ExportEntry]) -> Int {
+        zip(items, entries).filter { !$1.own && $1.name != Files.outputName(for: $0.url) }.count
+    }
+
+    private func run(items: [PhotoItem], entries: [ExportEntry], out: URL, policy: ExistingFiles) {
         exporting = true
         progress = 0
         for i in photos.indices where photos[i].checked { photos[i].mark = .none }
-        let s = settings, res = resources
+        let s = settings, res = resources, key = sourceKey, cache = sourceIDs
+        let reserved = Set(entries.map { $0.name.lowercased() })
+        let actions = entries.map { ExportPlan.action(for: $0, policy: policy) }
         exportTask = Task.detached(priority: .userInitiated) { [weak self] in
-            var done = 0, failed = 0, skipped = 0
+            var done = 0, copies = 0, numbered = 0, failed = 0, skipped = 0
             var reasons: [String: Int] = [:]
-            for (n, item) in items.enumerated() {
+            for (n, ((item, entry), action)) in zip(zip(items, entries), actions).enumerated() {
                 if Task.isCancelled { break }
-                let dst = out.appendingPathComponent(Files.outputName(for: item.url))
                 var mark = PhotoItem.Mark.done
-                if !overwrite && FileManager.default.fileExists(atPath: dst.path) {
+                if action == .skip {
                     skipped += 1; mark = .skipped
                 } else {
                     do {
@@ -619,8 +726,34 @@ final class AppModel {
                         }
                         let canvas = try Renderer.render(photo, options: s.renderOptions, footer: footer, resources: res)
                         let sig = OutputSignature.make(source: item.url, settings: s.fingerprintSource)
-                        try Renderer.saveJPEG(canvas, to: dst, quality: s.renderOptions.quality, signature: sig,
-                                              replace: overwrite)
+                        let source = entry.source.isEmpty ? cache.id(for: item.url, key: key) : entry.source
+                        let data = try Renderer.encodeJPEG(canvas, quality: s.renderOptions.quality, signature: sig,
+                                                           source: source)
+                        let base = out.appendingPathComponent(Files.outputName(for: item.url))
+                        switch action {
+                        case .overwrite:
+                            // Checked again right before: still this photo's own output (or the pre-1.2 one it
+                            // was matched to)? Otherwise something else took the name meanwhile: keep it, number.
+                            let dst = out.appendingPathComponent(entry.name)
+                            let now = OutputSignature.read(at: dst)
+                            let stillOwn = now.map { $0.source != nil ? $0.source == source : $0.signature != nil }
+                                ?? !FileManager.default.fileExists(atPath: dst.path)
+                            if stillOwn {
+                                try Renderer.store(data, to: dst, replace: true)
+                            } else {
+                                _ = try Renderer.storeUnique(data, base: base, first: 2, reserved: reserved)
+                                numbered += 1
+                            }
+                        case .copy:                          // 自動改名: a new copy next to the earlier output
+                            _ = try Renderer.storeUnique(data, base: base, first: 2, reserved: reserved)
+                            copies += 1
+                        case .write, .skip:                  // a new output: its planned name, or the next free
+                            let first = ExportPlan.family(of: entry.name)?.number ?? 1   // one if it was taken since
+                            var others = reserved
+                            others.remove(entry.name.lowercased())
+                            let written = try Renderer.storeUnique(data, base: base, first: first, reserved: others)
+                            if written.lastPathComponent != base.lastPathComponent { numbered += 1 }
+                        }
                         done += 1
                     } catch RenderError.exists {
                         skipped += 1; mark = .skipped
@@ -636,16 +769,45 @@ final class AppModel {
                     model.status = "匯出中 \(n + 1) / \(items.count)"
                 }
             }
-            let (d, sk, f) = (done, skipped, failed)
+            let (d, c, nb, sk, f) = (done, copies, numbered, skipped, failed)
             let why = reasons.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: "、")
             guard let model = self else { return }
             await MainActor.run {
                 model.exporting = false
-                model.status = "完成 \(d) 張" + (sk > 0 ? "，略過 \(sk) 張（已存在）" : "")
+                var notes: [String] = []
+                if c > 0 { notes.append("\(c) 張自動改名") }
+                if nb > 0 { notes.append("\(nb) 張因已有同名檔案而加上編號") }
+                model.status = "完成 \(d) 張" + (notes.isEmpty ? "" : "（" + notes.joined(separator: "，") + "）")
+                    + (sk > 0 ? "，略過 \(sk) 張（已存在）" : "")
                     + (f > 0 ? "，失敗 \(f) 張（\(why)）" : "")
+                model.exportedCounts = [:]              // out of date now; the source manager counts again
+                model.importedExported = nil
             }
         }
     }
 
     func stopExport() { exportTask?.cancel() }
+}
+
+/// Source IDs by path, size and modification time: reading the metadata of thousands of photos again each time
+/// the source manager opens would be slow on an external disk. A changed file gets a new entry.
+final class SourceIDCache: @unchecked Sendable {
+    private var ids: [String: String] = [:]
+    private let lock = NSLock()
+
+    func id(for url: URL, key: Data) -> String {
+        var st = stat()
+        let stamp = stat(url.path, &st) == 0
+            ? "\(st.st_size)|\(st.st_mtimespec.tv_sec)|\(st.st_mtimespec.tv_nsec)" : "?"
+        let k = url.standardizedFileURL.path + "|" + stamp
+        lock.lock()
+        if let hit = ids[k] { lock.unlock(); return hit }
+        lock.unlock()
+        let id = OutputSignature.sourceID(for: url, key: key)
+        lock.lock()
+        if ids.count > 50_000 { ids.removeAll() }
+        ids[k] = id
+        lock.unlock()
+        return id
+    }
 }

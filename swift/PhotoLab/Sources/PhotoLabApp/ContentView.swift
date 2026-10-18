@@ -47,6 +47,10 @@ struct ContentView: View {
             Button("刪除", role: .destructive) { model.deletePreset(model.presetName) }
             Button("取消", role: .cancel) {}
         } message: { Text("要刪除預設「\(model.presetName)」嗎？") }
+        .alert("來源金鑰", isPresented: Binding(get: { model.startupWarning != nil },
+                                                set: { if !$0 { model.startupWarning = nil } })) {
+            Button("好") {}
+        } message: { Text(model.startupWarning ?? "") }
         .alert("無法儲存", isPresented: Binding(get: { presetError != nil }, set: { if !$0 { presetError = nil } })) {
             Button("好") {}
         } message: { Text(presetError ?? "") }
@@ -54,16 +58,19 @@ struct ContentView: View {
                isPresented: Binding(get: { model.overwritePrompt != nil },
                                     set: { if !$0 { model.overwritePrompt = nil } }),
                presenting: model.overwritePrompt) { _ in
-            Button("覆蓋", role: .destructive) { model.resolveOverwrite(overwrite: true) }
-            Button("只匯出新的") { model.resolveOverwrite(overwrite: false) }
-            Button("取消", role: .cancel) { model.resolveOverwrite(overwrite: nil) }
+            Button("自動改名") { model.resolveOverwrite(.rename) }
+            Button("覆蓋", role: .destructive) { model.resolveOverwrite(.overwrite) }
+            Button("略過（只匯出新的）") { model.resolveOverwrite(.skip) }
+            Button("取消", role: .cancel) { model.resolveOverwrite(nil) }
         } message: { p in Text(overwriteMessage(p)) }
     }
 
     private func overwriteMessage(_ p: OverwritePrompt) -> String {
-        var t = "輸出資料夾裡已有 \(p.existing) 張同名的檔案。"
-        t += p.different > 0 ? "其中 \(p.different) 張是用不同的設定做的。" : "它們的設定與現在相同。"
-        return t + "\n要覆蓋它們，還是只匯出新的？"
+        var t = "有 \(p.existing) 張照片在輸出資料夾裡已有上次的輸出。"
+        t += p.different > 0 ? "其中 \(p.different) 張是用不同的設定做的，或沒有完整寫完。" : "它們的設定與現在相同。"
+        if p.numbered > 0 { t += "\n另有 \(p.numbered) 張的檔名已被其他檔案使用，會存成 -2、-3…（不會蓋掉它們）。" }
+        if p.legacy > 0 { t += "\n其中 \(p.legacy) 張是 1.2 以前的輸出，只能依檔名判斷是否為同一張照片。" }
+        return t + "\n要自動改名（另存為 -2、-3…）、覆蓋，還是略過這些照片上次的輸出？"
     }
 
     // MARK: left panel
@@ -162,6 +169,20 @@ struct ContentView: View {
                     .padding(.horizontal, 10).frame(height: Paper.controlHeight)
                     .background(Paper.fill, in: RoundedRectangle(cornerRadius: Paper.controlRadius))
                 Button("選擇") { model.chooseOutput() }.buttonStyle(PaperButtonStyle())
+                    .disabled(model.exporting || model.planning)
+            }
+            HStack {
+                Text("既有檔案").font(.system(size: 12))
+                Menu {
+                    ForEach(ExistingFiles.allCases, id: \.self) { e in
+                        Button(e.label) { model.existingFiles = e }
+                    }
+                } label: {
+                    Text(model.existingFiles.label).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .menuStyle(.button).buttonStyle(PaperButtonStyle())
+                .disabled(model.exporting || model.planning)
+                .help("照片在輸出資料夾已有上次的輸出時怎麼做。1.2 起的輸出記得自己的來源照片：別張照片的同名檔案不會被覆蓋，新的輸出改用 -2、-3…（1.2 以前的輸出只能依檔名判斷）")
             }
         }
     }
@@ -389,7 +410,7 @@ struct ContentView: View {
             Button("重設") { model.reset() }.buttonStyle(PaperButtonStyle(compact: true))
             Button { model.export() } label: { Label("匯出勾選的照片", systemImage: "square.and.arrow.up") }
                 .buttonStyle(PaperButtonStyle(filled: true))
-                .disabled(model.exporting || model.photos.isEmpty)
+                .disabled(model.exporting || model.planning || model.photos.isEmpty)
         }
         .padding(.horizontal, Paper.gap + 2)
         .padding(.bottom, 2)

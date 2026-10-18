@@ -61,19 +61,25 @@ final class SaveJPEGTests: XCTestCase {
     }
 
     /// Plays a volume like exFAT on any disk: the exclusive rename answers ENOTSUP when the name is free and EEXIST
-    /// when it is taken, so the store falls back to writeExclusive, and leaves existing files alone.
+    /// when it is taken, so the store falls back to writeExclusive, removes its temp file first and leaves
+    /// existing files alone.
     func testStoreFallsBackWhereExclusiveRenameIsTurnedDown() throws {
         let dir = try scratch()
-        let exfatLike: (URL, URL) -> Int32 = { _, to in FileManager.default.fileExists(atPath: to.path) ? EEXIST : ENOTSUP }
-        let dst = dir.appendingPathComponent("a.jpg"), tmp = dir.appendingPathComponent(".tmp")
-        try Data("new".utf8).write(to: tmp)
-        XCTAssertEqual(Renderer.storeWithoutOverwriting(Data("new".utf8), tmp: tmp, at: dst, renameExclusive: exfatLike), 0)
+        let exfatLike: Renderer.ExclusiveRename = { _, to in FileManager.default.fileExists(atPath: to.path) ? EEXIST : ENOTSUP }
+        let dst = dir.appendingPathComponent("a_ig.jpg")
+        func once(_ text: String) throws -> URL {
+            try Renderer.storeUnique(Data(text.utf8), base: dst, first: 1, reserved: [], limit: 1, renameExclusive: exfatLike)
+        }
+        XCTAssertEqual(try once("new"), dst)
         XCTAssertEqual(try Data(contentsOf: dst), Data("new".utf8))
-        try Data("again".utf8).write(to: tmp)
-        XCTAssertEqual(Renderer.storeWithoutOverwriting(Data("again".utf8), tmp: tmp, at: dst, renameExclusive: exfatLike),
-                       EEXIST)
+        XCTAssertThrowsError(try once("again")) {
+            guard case RenderError.exists = $0 else { return XCTFail("expected .exists, got \($0)") }
+        }
         XCTAssertEqual(try Data(contentsOf: dst), Data("new".utf8))
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["a.jpg"], "temp file removed")
+        let next = try Renderer.storeUnique(Data("third".utf8), base: dst, reserved: [], renameExclusive: exfatLike)
+        XCTAssertEqual(next.lastPathComponent, "a_ig-2.jpg")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted(), ["a_ig-2.jpg", "a_ig.jpg"],
+                       "temp files removed")
     }
 
     /// A JPEG cut off while being written still carries its signature in the header; it must not pass as finished.

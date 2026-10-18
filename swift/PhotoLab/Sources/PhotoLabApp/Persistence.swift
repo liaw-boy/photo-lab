@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import PhotoLabCore
 
@@ -12,6 +13,7 @@ struct SavedState {
 
     var settings = Settings()
     var outputDir: String?
+    var existingFiles = ExistingFiles.ask
     var folders: [String] = []
     var imported: [String] = []
     var view = "all"
@@ -44,6 +46,7 @@ struct SavedState {
         var out = SavedState()
         out.settings = Settings(json: obj["settings"] as? [String: Any] ?? [:])
         if let p = obj["output_dir"] as? String, !p.isEmpty, p.count <= 4096 { out.outputDir = p }
+        if let e = obj["existing_files"] as? String, let v = ExistingFiles(rawValue: e) { out.existingFiles = v }
         out.folders = paths(obj["folders"] ?? obj["sources"], max: maxFolders)
         out.imported = paths(obj["imported"], max: maxImported)
         if let v = obj["view"] as? String, v.count <= 4100 { out.view = v }
@@ -72,6 +75,7 @@ struct SavedState {
                                           "folders": folders, "imported": imported, "view": view, "appearance": appearance, "thumb_h": thumbHeight,
                                           "presets": presets]
             if let outputDir { payload["output_dir"] = outputDir }
+            payload["existing_files"] = existingFiles.rawValue
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
             let tmp = dir.appendingPathComponent(".settings_\(UUID().uuidString).tmp")
             guard fm.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
@@ -79,5 +83,51 @@ struct SavedState {
         } catch {
             // settings are a convenience: a write problem must never get in the way of the app
         }
+    }
+}
+
+/// The key of the source IDs written into outputs (`OutputSignature.sourceID`). Losing it means earlier outputs
+/// are no longer recognised as their photos' own (new exports then get numbers; nothing is overwritten), so it
+/// lives in a file of its own next to the settings: made once with O_EXCL (mode 0600), and never replaced. When
+/// the file is there but cannot be read, this run uses a key of its own and leaves the file alone.
+enum SourceKeyStore {
+    static var fileURL: URL { SavedState.fileURL.deletingLastPathComponent().appendingPathComponent("source.key") }
+
+    /// The key, and whether it is the one kept on disk (false: a key for this run only; the app says so).
+    /// A new key file appears in one step (written to a temp file, then linked in place, which fails if one is
+    /// there already), so it is either missing or complete, never half written.
+    static func load() -> (key: Data, kept: Bool) {
+        let url = fileURL
+        if let key = readKey(url) { return (key, true) }
+        var st = stat()
+        let missing = lstat(url.path, &st) != 0 && errno == ENOENT
+        let fresh = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+        guard missing else { return (fresh, false) }              // there but unusable: never overwrite it
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        let tmp = dir.appendingPathComponent(".source_\(UUID().uuidString).tmp")
+        let fd = open(tmp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return (fresh, false) }
+        let wrote = fresh.withUnsafeBytes { write(fd, $0.baseAddress!, $0.count) } == fresh.count && fsync(fd) == 0
+        close(fd)
+        defer { unlink(tmp.path) }
+        guard wrote else { return (fresh, false) }
+        if link(tmp.path, url.path) == 0 { return (fresh, true) }
+        return readKey(url).map { ($0, true) } ?? (fresh, false)     // another instance made one just now?
+    }
+
+    /// The key file, if it is a regular file of this user, not readable by others, of 32 bytes. Opened without
+    /// following a symlink and checked on the open file itself.
+    private static func readKey(_ url: URL) -> Data? {
+        let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size == 32, st.st_uid == getuid(),
+              st.st_mode & 0o077 == 0 else { return nil }
+        var buf = [UInt8](repeating: 0, count: 32)
+        guard Darwin.read(fd, &buf, 32) == 32 else { return nil }
+        return Data(buf)
     }
 }

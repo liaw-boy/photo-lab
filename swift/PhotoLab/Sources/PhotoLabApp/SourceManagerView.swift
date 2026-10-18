@@ -8,19 +8,22 @@ struct SourceManagerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Paper.gap) {
             Text("來源管理").font(.system(size: 18, weight: .bold))
-            Text("這裡只是從清單移除，不會刪除任何照片。").font(.system(size: 12)).foregroundStyle(Paper.muted)
+            Text("這裡只是從清單移除，不會刪除任何照片。「已輸出」以目前的輸出資料夾計算。").font(.system(size: 12))
+                .foregroundStyle(Paper.muted)
             ScrollView {
                 VStack(spacing: Paper.inner) {
                     row(title: "全部照片", subtitle: "所有資料夾與已匯入的照片", count: nil,
                         active: model.view == .all, select: { model.view = .all }, remove: nil)
                     ForEach(model.folders, id: \.self) { f in
                         row(title: f.lastPathComponent, subtitle: f.path, count: model.folderCounts[f],
+                            exported: model.exportedCounts[f],
                             active: model.view == .folder(f),
                             missing: !FileManager.default.fileExists(atPath: f.path),
                             select: { model.view = .folder(f) }, remove: { model.removeFolder(f) })
                     }
                     if !model.imported.isEmpty {
-                        row(title: "已匯入", subtitle: "單獨匯入的照片", count: model.imported.count,
+                        row(title: "已匯入", subtitle: "單獨匯入的照片", count: model.importedCount ?? model.imported.count,
+                            exported: model.importedExported,
                             active: model.view == .imported, select: { model.view = .imported },
                             remove: { model.clearImported() })
                     }
@@ -39,10 +42,12 @@ struct SourceManagerView: View {
         .frame(width: 640)
         .background(Paper.bg)
         .preferredColorScheme(.light)
-        .onAppear { model.refreshCounts() }
+        .onAppear { model.countsShowExported = true; model.refreshCounts() }
+        .onDisappear { model.countsShowExported = false }
     }
 
-    private func row(title: String, subtitle: String, count: Int?, active: Bool, missing: Bool = false,
+    private func row(title: String, subtitle: String, count: Int?, exported: Int? = nil, active: Bool,
+                     missing: Bool = false,
                      select: @escaping () -> Void, remove: (() -> Void)?) -> some View {
         HStack(spacing: 10) {
             Image(systemName: active ? "largecircle.fill.circle" : "circle")
@@ -52,7 +57,11 @@ struct SourceManagerView: View {
                     .foregroundStyle(missing ? Color.red : Paper.muted).lineLimit(1).truncationMode(.middle)
             }
             Spacer()
-            if let count { Text("\(count) 張").font(.system(size: 12)).foregroundStyle(Paper.muted) }
+            if let count {
+                Text(exported.map { "\(count) 張 · 已輸出 \($0)" } ?? "\(count) 張")
+                    .font(.system(size: 12)).foregroundStyle(Paper.muted)
+                    .help("已輸出：目前的輸出資料夾裡已有它的輸出檔")
+            }
             if let remove {
                 Button("移除", action: remove).buttonStyle(PaperButtonStyle(compact: true))
             }
