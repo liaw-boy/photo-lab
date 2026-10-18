@@ -20,6 +20,7 @@ case "$VERSION" in *[!0-9.]*|"") echo "bad VERSION: $VERSION" >&2; exit 1 ;; esa
 REPO="liaw-boy/photo-lab"
 TAG="v$VERSION"
 ZIP="$ROOT/dist/PhotoLab-$VERSION-macOS.zip"         # the clean build only, never the -with-logos one
+DMG="$ROOT/dist/PhotoLab-$VERSION-macOS.dmg"         # for first installs; updates use the zip
 
 if [ "$PUBLISH" = 1 ]; then
   [ -z "$(git -C "$ROOT" status --porcelain)" ] || { echo "working tree not clean" >&2; exit 1; }
@@ -52,6 +53,7 @@ if [ "$PUBLISH" = 1 ]; then
   ./package.sh                                         # clean build of exactly this commit
 fi
 [ -f "$ZIP" ] || { echo "missing $ZIP (run ./package.sh first)" >&2; exit 1; }
+[ "$PUBLISH" = 0 ] || [ -f "$DMG" ] || { echo "missing $DMG" >&2; exit 1; }
 TOOLS=".build/artifacts/sparkle/Sparkle/bin"
 [ -x "$TOOLS/generate_appcast" ] || { echo "missing Sparkle tools (run swift package resolve)" >&2; exit 1; }
 
@@ -81,13 +83,13 @@ if [ "$PUBLISH" = 1 ]; then
   cp "$NOTES_DIR/section.md" "$NOTES_DIR/release.md"
   cat >> "$NOTES_DIR/release.md" <<'NOTES'
 
-**Install (macOS 14+):** unzip, move `PhotoLab.app` to Applications, first start: right-click → Open (ad-hoc signed, not notarized).
+**Install (macOS 14+):** open the `.dmg` and drag `PhotoLab.app` to Applications (or unzip the `.zip`), first start: right-click → Open (ad-hoc signed, not notarized).
 Already on 1.1.0 or later: Photo_Lab → 檢查更新… installs this version.
 Brand logos and fonts are not included: see Help → 自備品牌 logo 與字體… in the app, or the README.
 NOTES
   # The release creates the tag on GitHub at this commit in the same step (a lightweight tag), so a failed upload
   # leaves no stray tag; gh uploads into a draft first, and a draft left behind is caught by the check above.
-  gh release create "$TAG" "$ZIP" "$ROOT/dist/appcast.xml" --repo "$REPO" --title "Photo_Lab $VERSION" \
+  gh release create "$TAG" "$ZIP" "$DMG" "$ROOT/dist/appcast.xml" --repo "$REPO" --title "Photo_Lab $VERSION" \
     --target "$(git -C "$ROOT" rev-parse HEAD)" --notes-file "$NOTES_DIR/release.md" --latest
   echo "published: https://github.com/$REPO/releases/tag/$TAG"
   git -C "$ROOT" fetch -q origin "refs/tags/$TAG:refs/tags/$TAG" \

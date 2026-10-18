@@ -31,7 +31,7 @@
 
 > 需要 **macOS 14** 以上。
 
-1. 從 [Releases](../../releases/latest) 下載 `PhotoLab-<版本>-macOS.zip`，解壓縮後把 `PhotoLab.app` 放進「應用程式」。
+1. 從 [Releases](../../releases/latest) 下載 `PhotoLab-<版本>-macOS.dmg`，打開後把 `PhotoLab.app` 拖進「應用程式」。（也可以下載 `.zip`，解壓縮後自己放進去。）
 2. App 沒有經過 Apple 公證：第一次請在檔案上按右鍵 → **打開**（或到「系統設定 → 隱私權與安全性」按「仍要打開」）。
 3. **品牌 logo 與字體不內含**（商標與授權），請自備，見[自備品牌 logo 與字體](#自備品牌-logo-與字體)。
 
@@ -118,7 +118,7 @@ App 的資料都在這裡，刪掉就是全新狀態：
 cd swift/PhotoLab
 ./run.sh                     # 建置 release 版並啟動（debug 版慢很多）
 swift test                   # 單元測試：存檔（含 exFAT 情境）、輸出命名、樣式編輯
-./package.sh                 # dist/PhotoLab.app 與 zip（乾淨版，不含 logo）
+./package.sh                 # dist/PhotoLab.app、zip 與 dmg（乾淨版，不含 logo）
 ./package.sh --with-logos    # 把你自己的 logos/ fonts/ 一起包進去（只給自己用，不要外傳）
 ```
 

@@ -1,8 +1,8 @@
 #!/bin/sh
-# Builds the release app and packs it as dist/PhotoLab.app + a zip.
-#   ./package.sh              clean build  -> dist/PhotoLab-<version>-macOS.zip  (the one to publish)
+# Builds the release app and packs it as dist/PhotoLab.app + a zip (for updates) + a dmg (for first installs).
+#   ./package.sh              clean build  -> dist/PhotoLab-<version>-macOS.{zip,dmg}  (the ones to publish)
 #   ./package.sh --with-logos personal build with your own logos/ and fonts/ packed in
-#                             -> dist/PhotoLab-<version>-macOS-with-logos.zip  (do not hand it to others)
+#                             -> dist/PhotoLab-<version>-macOS-with-logos.{zip,dmg}  (do not hand them to others)
 # The app is signed ad hoc (no developer account needed); on another Mac the first start needs right-click > Open.
 # A clean build reads logos / fonts from ~/Library/Application Support/Photo_Lab/{logos,fonts}.
 set -eu
@@ -95,6 +95,19 @@ SUFFIX=""; [ "$WITH_LOGOS" = 1 ] && SUFFIX="-with-logos"
 ZIP="$DIST/PhotoLab-$VERSION-macOS$SUFFIX.zip"
 rm -f "$ZIP"
 ditto -c -k --norsrc --noextattr --keepParent "$APP" "$ZIP"
-shasum -a 256 "$ZIP"
+# The disk image for first installs: the app next to an Applications shortcut, to drag it over.
+# (Updates keep using the zip: that is what the appcast points to.)
+DMG="$DIST/PhotoLab-$VERSION-macOS$SUFFIX.dmg"
+DMG_STAGE="$DIST/.dmg-stage"
+rm -rf "$DMG_STAGE" "$DMG"
+mkdir -p "$DMG_STAGE"
+ditto "$APP" "$DMG_STAGE/PhotoLab.app"
+ln -s /Applications "$DMG_STAGE/Applications"
+hdiutil create -quiet -volname "Photo_Lab" -srcfolder "$DMG_STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+rm -rf "$DMG_STAGE"
+hdiutil verify -quiet "$DMG"
+
+shasum -a 256 "$ZIP" "$DMG"
 echo "built: $APP"
 echo "zip:   $ZIP"
+echo "dmg:   $DMG"
